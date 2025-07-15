@@ -6,6 +6,10 @@ from models import CreateModel
 from datasets import CreateDataset
 from .metrics import compute_cls_metrics, compute_surv_metrics
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import Normalize
+import matplotlib.cm as cm
 
 
 class MetricLogger:
@@ -77,7 +81,7 @@ class Trainer:
     def kfold_train(self, args):
         dataset = CreateDataset(args)
 
-        for fold, (train_dataset, test_dataset) in enumerate(dataset.get_kfold_datasets(k=args.kfold, seed=args.seed)):
+        for fold, (train_dataset, test_dataset) in enumerate(dataset.get_kfold_datasets()):
             self.train_dataset = train_dataset
             self.test_dataset = test_dataset
             self.fold = fold
@@ -93,6 +97,9 @@ class Trainer:
             if self.verbose:
                 print('-'*20, f'Fold {fold} Metrics', '-'*20)
             print(metric_dict)
+            if args.method == 'deepcdf' and args.n_bins > 0:
+                self._fold_plot_2d(args, fold, metric_dict, self.test_loader, training_set=False)
+                self._fold_plot_2d(args, fold, metric_dict, self.train_loader, training_set=True)
 
             # self.fold_univariate_cox_regression_analysis(args, fold)
         
@@ -117,7 +124,7 @@ class Trainer:
                 loss.backward()
 
                 # clip gradients to avoid exploding gradients
-                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, norm_type=2)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, norm_type=2)
 
                 self.optimizer.step()
                 if self.scheduler is not None:
@@ -181,8 +188,8 @@ class Trainer:
         if not os.path.exists(res_path):
             os.makedirs(res_path)
 
-        settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs']
-        kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs']
+        settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed', 'Hidden Dimensions', 'layers', 'Bins']
+        kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed', 'd_hid', 'n_layers', 'n_bins']
 
         set2kwargs = {k: v for k, v in zip(settings, kwargs )}
 
@@ -275,4 +282,74 @@ class Trainer:
             existing_df.to_excel(df_path, index=False)
 
         self.model.train(training)       
-            
+    
+    def _fold_plot_2d(self, args, fold, metric_dict, dataloader, training_set, uncensored=True):
+        training = self.model.training
+        suffix = '_training' if training_set else ''
+        self.model.eval()
+        save_path = os.path.join(args.results, f"Fold_{fold}_{args.method}{suffix}.png")
+
+        # Storage
+        coord_x = torch.Tensor().cuda()
+        coord_y = torch.Tensor().cuda()
+        event = torch.Tensor().cuda()
+        duration = torch.Tensor().cuda()
+
+        # Collect data
+        with torch.no_grad():
+            for data in dataloader:
+                data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
+                outputs = self.model.project_2d(data)
+                coord_x = torch.cat((coord_x, outputs.x), dim=0)
+                coord_y = torch.cat((coord_y, outputs.y), dim=0)
+                event = torch.cat((event, data['event']), dim=0)
+                duration = torch.cat((duration, data['duration']), dim=0)
+
+        # Convert to NumPy
+        coord_x = coord_x.cpu().numpy()
+        coord_y = coord_y.cpu().numpy()
+        event = event.cpu().numpy()
+        duration = duration.cpu().numpy()
+        biases = self.model.biases.cpu().detach().numpy()
+        print(f"Fold {fold} — Biases: {biases}")
+
+        # Normalize duration for red colormap
+        norm = Normalize(vmin=duration[event == 1].min(), vmax=duration[event == 1].max())
+        cmap = cm.Reds
+
+        # Prepare figure
+        plt.figure(figsize=(8, 6))
+
+        # Plot censored (event=0) in blue
+        if not uncensored:
+            plt.scatter(coord_x[event == 0], coord_y[event == 0], color='blue', alpha=0.5, label='Censored')
+
+        # Plot events (event=1) in red with colormap based on duration
+        colors = cmap(norm(duration[event == 1]))
+        plt.scatter(coord_x[event == 1], coord_y[event == 1], color=colors, alpha=0.7, label='Event')
+
+        # Add colorbar for duration
+        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm)
+        cbar.set_label('Survival Time')
+
+        # Plot vertical threshold lines (CDF biases)
+        for b in biases:
+            plt.axvline(x=-b, color='black', linestyle='--', alpha=0.5)
+
+        # Plot formatting
+        plt.xlabel("Projection (along head weight)")
+        plt.ylabel("Perpendicular Component")
+        plt.title(f"Fold {fold} — C-Index: {metric_dict['C-index']:.4f}")
+        plt.legend(loc='upper right')
+        plt.grid(False)
+
+        # Save and cleanup
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Restore training state
+        self.model.train(training)
+

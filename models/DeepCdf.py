@@ -6,17 +6,20 @@ from .utils import ModelOutputs
 
 
 class CDFLoss(nn.Module):
-    def __init__(self, monotonic_weight: float = 0.1, sigma: float = 0.5, margin= 0.1, beta=0.1):
-        """
-        Args:
-            num_bins: total number of time bins (T)
-            monotonic_weight: weight for monotonicity regularization
-        """
+    def __init__(self, 
+                 monotonic_weight: float = 1.0,
+                 sigma: float = 0.5,
+                 margin: float = 1.0,
+                 beta: float = 0.,
+                 pmf_weight: float = 0.,
+                 rank_weight: float = 0.1):
         super().__init__()
-        self.sigma = sigma  # for rank loss
+        self.sigma = sigma
         self.monotonic_weight = monotonic_weight
         self.margin = margin
         self.beta = beta
+        self.pmf_weight = pmf_weight
+        self.rank_weight = rank_weight
 
     @staticmethod
     def pair_rank_mat(idx_durations: torch.Tensor, events: torch.Tensor) -> torch.Tensor:
@@ -24,67 +27,72 @@ class CDFLoss(nn.Module):
         dur_j = idx_durations.view(1, -1)
         ev_i = events.view(-1, 1)
         ev_j = events.view(1, -1)
+        return ((dur_i < dur_j) | ((dur_i == dur_j) & (ev_j == 0))).float() * ev_i
 
-        rank_mat = ((dur_i < dur_j) | ((dur_i == dur_j) & (ev_j == 0))).float() * ev_i
-        return rank_mat
-
-    def rank_loss_on_risk(self, risk: torch.Tensor, idx_durations: torch.Tensor, events: torch.Tensor, sigma: float) -> torch.Tensor:
-        n = risk.shape[0]
-        
-        # Pairwise differences in risk scores
-        diff_risk = risk.view(-1, 1) - risk.view(1, -1)  # [batch, batch]
-        
-        rank_mat = self.pair_rank_mat(idx_durations, events)
-        assert rank_mat.sum() > 0, "Rank matrix should not be empty"
-        
-        # Exponential penalty for incorrect ordering
-        loss = rank_mat * torch.exp(-diff_risk / sigma)
-
-        loss = loss.sum() / rank_mat.sum()
-
-        return loss
+    def rank_loss_on_risk(self, risk: torch.Tensor, durations: torch.Tensor, events: torch.Tensor) -> torch.Tensor:
+        diff_risk = risk.view(-1, 1) - risk.view(1, -1)
+        rank_mat = self.pair_rank_mat(durations, events)
+        loss = rank_mat * torch.exp(-diff_risk / self.sigma)
+        return loss.sum() / (rank_mat.sum() + 1e-6)
 
     def forward(self, outputs, data):
         """
         Args:
-            F_pred: [B, T] predicted cumulative incidence function F(t)
-            event: [B] binary (1 = uncensored, 0 = censored)
-            label: [B] integer bin index (0-based) of event/censoring time
-
+            outputs: ModelOutputs object with cdf/logits/risk/biases
+            data: dict with 'label', 'event', 'duration'
         Returns:
             scalar loss
         """
-        F_pred = outputs.cdf  # [B, T] predicted CDF
-        risk = outputs.risk  # [B] risk factors (not used in this loss)
-        label = data['duration']  # [B] integer bin index (0-based)
-        event = data['event']  # [B] binary (1 = uncensored,
+        F_pred = outputs.cdf        # [B, T]
+        logits = outputs.logits     # [B, T]
+        risk = outputs.risk         # [B]
+        label = data['label']       # [B]
+        event = data['event']       # [B]
+        durations = data.get('duration', label)  # fallback if no separate durations
+
         B, T = F_pred.shape
         device = F_pred.device
 
-        # --- Create target CDF ---
-        target = torch.zeros_like(F_pred)  # [B, T]
-        mask = torch.zeros_like(F_pred, dtype=torch.bool)  # [B, T]
+        # --- Vectorized CDF target & mask ---
+        time_idx = torch.arange(T, device=device).view(1, -1)  # [1, T]
+        label_exp = label.view(-1, 1)                          # [B, 1]
+        target = (time_idx >= label_exp).float()              # [B, T]
+        mask = torch.where(event.view(-1, 1).bool(),
+                           torch.ones_like(target).bool(),
+                           (time_idx <= label_exp))           # [B, T]
 
-        for i in range(B):
-            t_idx = label[i].item()
-            if event[i] == 1:
-                target[i, t_idx:] = 1
-                mask[i, :] = True
-            else: 
-                mask[i, :t_idx + 1] = True
+        # --- Binary CDF Loss (MSE on masked entries) ---
+        cdf_loss = ((F_pred - target) ** 2)[mask].mean()
+        # cdf_loss = F.binary_cross_entropy(F_pred[mask], target[mask])
 
-        # --- Binary Cross-Entropy Loss ---
-        bce = F.binary_cross_entropy(F_pred[mask], target[mask], reduction='mean')
 
-        # --- Monotonicity Penalty: ReLU(F(t) - F(t+1)) ---
-        # encourage F(t+1) > F(t)
+        # --- Monotonicity Penalty: ReLU(F(t) - F(t+1) + margin) ---
         monotonic_penalty = F.relu(F_pred[:, :-1] - F_pred[:, 1:] + self.margin).mean()
-        bce += self.monotonic_weight * monotonic_penalty
-        # bce += self.rank_loss_on_risk(risk, data['duration'], data['event'], self.sigma)
-        # regularization on the biases
-        bce += self.beta * torch.mean(outputs.biases ** 2)
 
-        return bce
+        # --- Bias Regularization ---
+        bias_reg = self.beta * outputs.biases.square().mean()
+
+        # # --- PMF Supervision via CrossEntropyLoss ---
+        # pmf_logits = logits.clone()
+        # pmf_logits[:, 1:] = logits[:, 1:] - logits[:, :-1]
+        # pmf_logits[:, 0] = logits[:, 0]  # first bin stays the same
+        # pmf_loss = F.cross_entropy(pmf_logits[event == 1], label[event == 1]) if (event == 1).any() else 0.0
+
+
+        rank_loss = self.rank_loss_on_risk(risk, label, event)
+
+
+        # --- Final Loss ---
+        total_loss = (
+            cdf_loss +
+            self.monotonic_weight * monotonic_penalty +
+            # self.pmf_weight * pmf_loss +
+            self.rank_weight * rank_loss +
+            self.beta * bias_reg
+        )
+
+        return total_loss
+
 
 
 class DeepCdf(nn.Module):
@@ -101,15 +109,19 @@ class DeepCdf(nn.Module):
         )
         self.n_classes = args.n_classes
         self.head = nn.Linear(args.d_hid, 1, bias=False)
-        self.biases = nn.Parameter(torch.zeros(self.n_classes)) 
+        # self.biases = nn.Parameter(torch.zeros(self.n_classes))
+        time_idx = torch.linspace(1, -1, self.n_classes)
+        self.biases = nn.Parameter(time_idx)  # initialize biases to linearly spaced values
         self.criterion = CDFLoss()
+        self.temp = 1.
     
     def forward(self, data):
         features = self.encoder(data['data'])
-        proj = self.head(features)
-        logits = proj + self.biases.view(1, -1)  # add biases for each time point
-        cdf = torch.sigmoid(logits)  # cumulative distribution function
-        risk = proj.view(-1)  # risk is the same as logits
+        logits = self.head(features)
+        # apply sigmoid then add biases for stability
+        proj = F.sigmoid(logits / self.temp)  # [B, 1]
+        cdf = proj + self.biases.view(1, -1)  # add biases for each time point
+        risk = logits.view(-1)  # risk is the same as logits
         return ModelOutputs(features=features, logits=logits, cdf=cdf, risk=risk, biases=self.biases)
 
     def compuite_loss(self, outputs, data):
@@ -117,4 +129,26 @@ class DeepCdf(nn.Module):
             outputs,
             data
         )
+
+    def project_2d(self, data):
+        features = self.encoder(data['data'])  # [B, D]
+        proj = self.head(features)  # [B, 1]
+
+        # Get weight vector (projection direction)
+        w = self.head.weight.squeeze(0)  # [D]
+        w = w / w.norm()  # normalize
+
+        # Get a perpendicular vector to w (in 2D: rotate 90°)
+        # In D > 2, take arbitrary orthogonal direction (e.g., Gram-Schmidt or fixed)
+        # For visualization, we just need any consistent orthogonal direction
+        # Let's pick a stable perpendicular vector using Gram-Schmidt
+        v = torch.randn_like(w)
+        v = v - (v @ w) * w  # remove projection on w
+        v = v / v.norm()
+
+        # Project features onto w (scalar) and v (perpendicular)
+        proj_x = F.sigmoid((features @ w))  # [B]
+        proj_y = (features @ v)  # [B]
+
+        return ModelOutputs(x=proj_x, y=proj_y)
 

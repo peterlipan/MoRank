@@ -23,8 +23,8 @@ class DeepHitsurvLoss(nn.Module):
 
     def forward(self, outputs, data):
         # directly predict the risk factors
-        rank_mat = self.pair_rank_mat(data['duration'], data['event'])
-        return self.dhl(outputs.logits, data['duration'], data['event'], rank_mat)
+        rank_mat = self.pair_rank_mat(data['label'], data['event'])
+        return self.dhl(outputs.logits, data['label'], data['event'], rank_mat)
 
 
 class DeepHit(nn.Module):
@@ -49,7 +49,7 @@ class DeepHit(nn.Module):
         pmf = F.softmax(logits, dim=-1)
         fht = torch.argmax(pmf, dim=1)
         prob_at_fht = torch.gather(pmf, 1, fht.unsqueeze(1)).squeeze(1)  # probability at first hitting time
-        risk = prob_at_fht / (fht + 1).float()  # risk is normalized by the first hitting time
+        risk = 1 / (fht + 1).float()  # risk is normalized by the first hitting time
         return ModelOutputs(features=features, logits=logits, pmf=pmf, risk=risk)
 
     def compuite_loss(self, outputs, data):
@@ -57,4 +57,3 @@ class DeepHit(nn.Module):
             outputs,
             data
         )
-

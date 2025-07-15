@@ -9,23 +9,25 @@ label_file: './datasets/METABRIC/label.csv'
 checkpoints: './checkpoints'
 results: './results'
 
+kfold: 5
+stratify: True
+n_bins: 12
 
 # model
 method: 'deepcdf'
 backbone: 'MLP'
 n_layers: 2
-d_hid: 256
-dropout: 0.2
-activation: 'relu'
+d_hid: 1024
+dropout: 0.
+activation: 'tanh'
 
 
 # training
 workers: 0
-optimizer: 'AdamW'
-kfold: 5
+optimizer: 'Adam'
 epochs: 100
 batch_size: 256
 lr: 2.0e-5
 lr_policy: 'cosine'
-weight_decay: 0.01
+weight_decay: 0.
 verbose: True
