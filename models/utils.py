@@ -29,5 +29,8 @@ def CreateModel(args):
     elif args.method.lower() == 'deepsurv':
         from .DeepSurv import DeepSurv
         return DeepSurv(args)
+    elif args.method.lower() == 'discrete':
+        from .DiscreteTime import DiscreteTime
+        return DiscreteTime(args)
     else:
         raise ValueError(f"Unknown method: {args.method}. Supported methods are: DeepHit, DeepCdf, DeepSurv.")

@@ -7,19 +7,23 @@ from .utils import ModelOutputs
 
 class CDFLoss(nn.Module):
     def __init__(self, 
-                 monotonic_weight: float = 1.0,
+                 cdf_weight: float = 1.0,
+                 monotonic_weight: float = 0.1,
                  sigma: float = 0.5,
-                 margin: float = 1.0,
+                 margin: float = 0.,
                  beta: float = 0.,
                  pmf_weight: float = 0.,
-                 rank_weight: float = 0.1):
+                 rank_weight: float = 0.1,
+                 gamma: float = 0.5):
         super().__init__()
         self.sigma = sigma
+        self.cdf_weight = cdf_weight
         self.monotonic_weight = monotonic_weight
         self.margin = margin
         self.beta = beta
         self.pmf_weight = pmf_weight
         self.rank_weight = rank_weight
+        self.gamma = gamma
 
     @staticmethod
     def pair_rank_mat(idx_durations: torch.Tensor, events: torch.Tensor) -> torch.Tensor:
@@ -57,12 +61,16 @@ class CDFLoss(nn.Module):
         time_idx = torch.arange(T, device=device).view(1, -1)  # [1, T]
         label_exp = label.view(-1, 1)                          # [B, 1]
         target = (time_idx >= label_exp).float()              # [B, T]
+        distance = (time_idx - label_exp).abs().float()  # |t - label|
+        decay_weight = torch.exp(-self.gamma * distance)
         mask = torch.where(event.view(-1, 1).bool(),
                            torch.ones_like(target).bool(),
                            (time_idx <= label_exp))           # [B, T]
 
         # --- Binary CDF Loss (MSE on masked entries) ---
-        cdf_loss = ((F_pred - target) ** 2)[mask].mean()
+        decay_weight = decay_weight * mask.float()
+        cdf_loss = ((F_pred - target) ** 2 * decay_weight)[mask].sum() / (decay_weight[mask].sum() + 1e-6)
+
         # cdf_loss = F.binary_cross_entropy(F_pred[mask], target[mask])
 
 
@@ -73,10 +81,10 @@ class CDFLoss(nn.Module):
         bias_reg = self.beta * outputs.biases.square().mean()
 
         # # --- PMF Supervision via CrossEntropyLoss ---
-        # pmf_logits = logits.clone()
-        # pmf_logits[:, 1:] = logits[:, 1:] - logits[:, :-1]
-        # pmf_logits[:, 0] = logits[:, 0]  # first bin stays the same
-        # pmf_loss = F.cross_entropy(pmf_logits[event == 1], label[event == 1]) if (event == 1).any() else 0.0
+        pmf_logits = logits.clone()
+        pmf_logits[:, 1:] = logits[:, 1:] - logits[:, :-1]
+        pmf_logits[:, 0] = logits[:, 0]  # first bin stays the same
+        pmf_loss = F.cross_entropy(pmf_logits[event == 1], label[event == 1]) if (event == 1).any() else 0.0
 
 
         rank_loss = self.rank_loss_on_risk(risk, label, event)
@@ -84,9 +92,9 @@ class CDFLoss(nn.Module):
 
         # --- Final Loss ---
         total_loss = (
-            cdf_loss +
+            self.cdf_weight * cdf_loss +
             self.monotonic_weight * monotonic_penalty +
-            # self.pmf_weight * pmf_loss +
+            self.pmf_weight * pmf_loss +
             self.rank_weight * rank_loss +
             self.beta * bias_reg
         )
@@ -110,18 +118,26 @@ class DeepCdf(nn.Module):
         self.n_classes = args.n_classes
         self.head = nn.Linear(args.d_hid, 1, bias=False)
         # self.biases = nn.Parameter(torch.zeros(self.n_classes))
-        time_idx = torch.linspace(1, -1, self.n_classes)
-        self.biases = nn.Parameter(time_idx)  # initialize biases to linearly spaced values
+        time_idx = torch.linspace(-1, 1, self.n_classes)
+        self.biases = nn.Parameter(time_idx, requires_grad=True)  # initialize biases to linearly spaced values
         self.criterion = CDFLoss()
-        self.temp = 1.
+        self.temp = 1.5
     
     def forward(self, data):
+        # features = self.encoder(data['data'])
+        # logits = self.head(features)
+        # # apply sigmoid then add biases for stability
+        # proj = F.sigmoid(logits / self.temp)  # [B, 1]
+        # cdf = proj + self.biases.view(1, -1)  # add biases for each time point
+        # cdf = cdf.clamp(min=0, max=1)  # ensure CDF is in [0, 1]
+        # risk = logits.view(-1)  # risk is the same as logits
+
         features = self.encoder(data['data'])
-        logits = self.head(features)
-        # apply sigmoid then add biases for stability
-        proj = F.sigmoid(logits / self.temp)  # [B, 1]
-        cdf = proj + self.biases.view(1, -1)  # add biases for each time point
-        risk = logits.view(-1)  # risk is the same as logits
+        proj = self.head(features)  # [B, 1]
+        logits = proj + self.biases.view(1, -1)  # add biases for each time point
+        cdf = F.sigmoid(logits / self.temp)  # apply sigmoid then add biases for stability
+        cdf = cdf.clamp(min=0, max=1)
+        risk = proj.view(-1)  # risk is the same as logits
         return ModelOutputs(features=features, logits=logits, cdf=cdf, risk=risk, biases=self.biases)
 
     def compuite_loss(self, outputs, data):
@@ -147,7 +163,7 @@ class DeepCdf(nn.Module):
         v = v / v.norm()
 
         # Project features onto w (scalar) and v (perpendicular)
-        proj_x = F.sigmoid((features @ w))  # [B]
+        proj_x = (features @ w)  # [B]
         proj_y = (features @ v)  # [B]
 
         return ModelOutputs(x=proj_x, y=proj_y)

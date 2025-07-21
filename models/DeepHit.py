@@ -46,10 +46,10 @@ class DeepHit(nn.Module):
     def forward(self, data):
         features = self.encoder(data['data'])
         logits = self.head(features)
-        pmf = F.softmax(logits, dim=-1)
-        fht = torch.argmax(pmf, dim=1)
+        pmf = F.softmax(logits, dim=1)  # probability mass function
+        fht = torch.argmax(pmf, dim=1)  # first hitting time
         prob_at_fht = torch.gather(pmf, 1, fht.unsqueeze(1)).squeeze(1)  # probability at first hitting time
-        risk = 1 / (fht + 1).float()  # risk is normalized by the first hitting time
+        risk = prob_at_fht / (fht + 1).float()  # risk is normalized by the first hitting time
         return ModelOutputs(features=features, logits=logits, pmf=pmf, risk=risk)
 
     def compuite_loss(self, outputs, data):

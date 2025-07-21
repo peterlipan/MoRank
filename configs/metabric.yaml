@@ -11,10 +11,10 @@ results: './results'
 
 kfold: 5
 stratify: True
-n_bins: 12
+n_bins: 16
 
 # model
-method: 'deepcdf'
+method: 'deepcdf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024

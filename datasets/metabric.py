@@ -16,7 +16,7 @@ class METABRICData:
 
         if n_bins > 0:
             self.bin_durations(n_bins)
-            self.n_classes = n_bins + 1  # +1 for the last bin
+            self.n_classes = n_bins + 2  # for edge bins
         else:
             self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
             self.label = self.duration
@@ -43,7 +43,7 @@ class METABRICData:
         self.label = np.digitize(
             self.duration,
             np.quantile(self.duration, q=np.linspace(0, 1, n_bins + 1)[1:-1])
-        ).astype(np.int64)
+        ).astype(np.int64) + 1 # shift right to make bin=0 represent F(0) = 0
 
     def get_kfold_datasets(self):
         if self.stratify:

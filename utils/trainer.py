@@ -124,7 +124,7 @@ class Trainer:
                 loss.backward()
 
                 # clip gradients to avoid exploding gradients
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, norm_type=2)
+                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, norm_type=2)
 
                 self.optimizer.step()
                 if self.scheduler is not None:
@@ -311,7 +311,7 @@ class Trainer:
         event = event.cpu().numpy()
         duration = duration.cpu().numpy()
         biases = self.model.biases.cpu().detach().numpy()
-        print(f"Fold {fold} — Biases: {biases}")
+        # print(f"Fold {fold} — Biases: {biases}")
 
         # Normalize duration for red colormap
         norm = Normalize(vmin=duration[event == 1].min(), vmax=duration[event == 1].max())
