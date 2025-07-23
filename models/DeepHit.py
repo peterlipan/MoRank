@@ -49,8 +49,11 @@ class DeepHit(nn.Module):
         pmf = F.softmax(logits, dim=1)  # probability mass function
         fht = torch.argmax(pmf, dim=1)  # first hitting time
         prob_at_fht = torch.gather(pmf, 1, fht.unsqueeze(1)).squeeze(1)  # probability at first hitting time
-        risk = prob_at_fht / (fht + 1).float()  # risk is normalized by the first hitting time
-        return ModelOutputs(features=features, logits=logits, pmf=pmf, risk=risk)
+        risk = -fht
+        cdf = torch.cumsum(pmf, dim=1)  # cumulative distribution function
+        cdf = cdf.clamp(min=0, max=1)  # ensure
+        surv = 1. - cdf
+        return ModelOutputs(features=features, logits=logits, pmf=pmf, risk=risk, cdf=cdf, surv=surv, fht=fht, prob_at_fht=prob_at_fht)
 
     def compuite_loss(self, outputs, data):
         return self.criterion(

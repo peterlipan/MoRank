@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, balanced_accuracy_score, \
     roc_auc_score, precision_score, matthews_corrcoef, cohen_kappa_score, average_precision_score
 from imblearn.metrics import sensitivity_score, specificity_score
-from sksurv.metrics import concordance_index_censored
+from sksurv.metrics import concordance_index_censored, cumulative_dynamic_auc, integrated_brier_score, concordance_index_ipcw
 
 
 def compute_cls_metrics(ground_truth, activations, avg='micro', demical_places=4):
@@ -48,31 +48,21 @@ def compute_cls_metrics(ground_truth, activations, avg='micro', demical_places=4
     return metrics
 
 
-def compute_surv_metrics(event_indicator, event_time, estimate):
-    event_indicator = event_indicator.cpu().detach().numpy()
-    event_time = event_time.cpu().detach().numpy()
-    estimate = estimate.cpu().detach().numpy()
+def compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, times):
 
-    # event_indicator must be boolen
-    event_indicator = event_indicator.astype(bool)
 
-    cindex, concordant, discordant, tied_risk, tied_time = concordance_index_censored(event_indicator, event_time, estimate, tied_tol=1e-08)
-    # to check whether the model is only learning from the time bins instead of the durations
-    # to check the C-Index on the uncensored data
-    uncensored_mask = event_indicator
-    indicator = np.ones_like(event_time[uncensored_mask], dtype=bool)
-    uncensored_cindex, *_ = concordance_index_censored(indicator, event_time[uncensored_mask], estimate[uncensored_mask], tied_tol=1e-08)
+    cindex, *_ = concordance_index_censored(test_surv['event'], test_surv['time'], risk_prob)
+    cindex_ipcw, *_ = concordance_index_ipcw(train_surv, test_surv, risk_prob)
+    ibs = integrated_brier_score(train_surv, test_surv, surv_prob, times)
+    auc, mean_auc = cumulative_dynamic_auc(train_surv, test_surv, 1 - surv_prob, times)
+    # set AUC as 0 if it is NaN
+    if np.isnan(mean_auc):
+        print(auc)
+        raise ValueError("AUC is NaN, check the survival probabilities or time points.")
     
-    metrics = {'C-index': cindex, 'Uncensored C-index': uncensored_cindex,
-               'Concordant': concordant / (concordant+discordant), 'Discordant': discordant / (concordant+discordant), 'Tied Risk': tied_risk, 'Tied Time': tied_time}
 
-    # calculate the C-Index for each time bin
-    # time_bins = np.unique(time_bin)
-    # for t in time_bins:
-    #     mask = time_bin == t
-    #     if np.sum(mask) > 0 and np.sum(event_indicator[mask]) > 0:
-    #         cindex_t, *_ = concordance_index_censored(event_indicator[mask], event_time[mask], estimate[mask], tied_tol=1e-08)
-    #         metrics[f'C-index at {t}'] = cindex_t
+    metrics = {'C-index': cindex, 'C-index IPCW': cindex_ipcw, 'AUC': mean_auc, 'IBS': ibs}
+
 
     metrics = {k: v for k, v in metrics.items()}
     return metrics

@@ -2,6 +2,7 @@ import os
 import torch
 import warnings
 import pandas as pd
+from sksurv.util import Surv
 from models import CreateModel
 from datasets import CreateDataset
 from .metrics import compute_cls_metrics, compute_surv_metrics
@@ -50,6 +51,8 @@ class Trainer:
         self.val_steps = val_steps
         self.verbose = args.verbose
         self.m_logger = MetricLogger(n_folds=args.kfold)
+        os.makedirs(args.checkpoints, exist_ok=True)
+        os.makedirs(args.results, exist_ok=True)
     
     def _init_components(self, args):
 
@@ -151,7 +154,13 @@ class Trainer:
             
         event_indicator = torch.Tensor().cuda() # whether the event (death) has occurred
         duration = torch.Tensor().cuda()
-        estimate = torch.Tensor().cuda()
+        risk_prob = torch.Tensor().cuda()
+        surv_prob = torch.Tensor().cuda()
+
+        # for estimating censoring distribution in the training set
+        train_duration = self.train_dataset.duration
+        train_event = self.train_dataset.event.astype(bool)
+        train_surv = Surv.from_arrays(event=train_event, time=train_duration)
 
         with torch.no_grad():
             for data in self.test_loader:
@@ -163,10 +172,25 @@ class Trainer:
                 risk = outputs.risk
                 event_indicator = torch.cat((event_indicator, data['event']), dim=0)
                 duration = torch.cat((duration, data['duration']), dim=0)
-                estimate = torch.cat((estimate, risk), dim=0)
-
+                risk_prob = torch.cat((risk_prob, risk), dim=0)
+                surv_prob = torch.cat((surv_prob, outputs.surv), dim=0)
             
-            metric_dict = compute_surv_metrics(event_indicator, duration, estimate)
+            event_indicator = event_indicator.cpu().detach().numpy().astype(bool)
+            duration = duration.cpu().detach().numpy()
+            risk_prob = risk_prob.cpu().detach().numpy()
+            surv_prob = surv_prob.cpu().detach().numpy()
+            test_surv = Surv.from_arrays(event=event_indicator, time=duration)
+
+            n_eval = int(args.n_bins * 10) if args.n_bins > 0 else 3000
+            # only count for the uncensored durations
+            valid_durations = duration[event_indicator]
+            time_points = np.linspace(valid_durations.min(), valid_durations.max() - 1, n_eval)
+            time_labels = self.test_dataset._duration_to_label(time_points)
+            # print(f"Time points: {time_points}, Time labels: {time_labels}")
+            # retrieve the surv probabilities at the time points
+            surv_prob = surv_prob[:, time_labels]
+
+            metric_dict = compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, time_points)
             metric_dict['Loss'] = loss / len(self.test_loader)
         
         self.model.train(training)
@@ -175,8 +199,6 @@ class Trainer:
     
     def save_model(self, args):
         model_name = f"{args.method}_{args.backbone}.pt"
-        if not os.path.exists(args.checkpoints):
-            os.makedirs(args.checkpoints, exist_ok=True)
         save_path = os.path.join(args.checkpoints, model_name)
         torch.save(self.model.state_dict(), save_path)
 
@@ -185,8 +207,6 @@ class Trainer:
 
         df_name = f"{args.kfold}Fold_{args.dataset}.xlsx"
         res_path = args.results
-        if not os.path.exists(res_path):
-            os.makedirs(res_path)
 
         settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed', 'Hidden Dimensions', 'layers', 'Bins']
         kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed', 'd_hid', 'n_layers', 'n_bins']
@@ -234,8 +254,6 @@ class Trainer:
         df_name = f"{args.kfold}Fold_{args.dataset}_Cox.xlsx"
         res_path = args.results
         df_path = os.path.join(res_path, df_name)
-        if not os.path.exists(res_path):
-            os.makedirs(res_path)
         
                 
         with torch.no_grad():

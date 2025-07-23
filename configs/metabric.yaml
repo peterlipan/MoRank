@@ -24,7 +24,7 @@ activation: 'tanh'
 
 # training
 workers: 0
-optimizer: 'Adam'
+optimizer: 'AdamW'
 epochs: 100
 batch_size: 256
 lr: 2.0e-5

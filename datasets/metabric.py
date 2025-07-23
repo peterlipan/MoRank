@@ -13,6 +13,7 @@ class METABRICData:
         self.stratify = stratify
         self.kfold = kfold
         self.seed = seed
+        self.n_bins = n_bins
 
         if n_bins > 0:
             self.bin_durations(n_bins)
@@ -40,10 +41,14 @@ class METABRICData:
 
     def bin_durations(self, n_bins):
         # Bin duration using quantiles (equal number of samples per bin)
-        self.label = np.digitize(
-            self.duration,
-            np.quantile(self.duration, q=np.linspace(0, 1, n_bins + 1)[1:-1])
-        ).astype(np.int64) + 1 # shift right to make bin=0 represent F(0) = 0
+        self.bin_edges = np.quantile(self.duration, q=np.linspace(0, 1, n_bins + 1))
+        self.label = np.digitize(self.duration, self.bin_edges[1:-1]).astype(np.int64) + 1
+
+    def _duration_to_label(self, duration):
+        if self.n_bins > 0:
+            return np.digitize(duration, self.bin_edges[1:-1]).astype(np.int64) + 1
+        else:
+            return duration.astype(np.int64)
 
     def get_kfold_datasets(self):
         if self.stratify:
@@ -65,6 +70,7 @@ class METABRICDataset(Dataset):
         self.n_features = metabric_data.n_features
         self.n_classes = metabric_data.n_classes
         self.n_events = metabric_data.n_events
+        self._duration_to_label = metabric_data._duration_to_label
 
     def __len__(self):
         return len(self.data)
@@ -76,3 +82,4 @@ class METABRICDataset(Dataset):
             'duration': self.duration[idx],
             'event': self.event[idx],
         }
+
