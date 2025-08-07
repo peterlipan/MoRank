@@ -1,20 +1,19 @@
 # environment
-visible_gpus: '1'
+visible_gpus: '0'
 seed: 42
 
 # dataset
-dataset: 'metabric'
-feature_file: './datasets/METABRIC/cleaned_features_final.csv'
-label_file: './datasets/METABRIC/label.csv'
+dataset: 'support'
 checkpoints: './checkpoints'
 results: './results'
 
 kfold: 5
 stratify: True
-n_bins: 16
+n_bins: 25
+normalize: False
 
 # model
-method: 'deepcdf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete'
+method: 'deepcdf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024
@@ -24,10 +23,10 @@ activation: 'tanh'
 
 # training
 workers: 0
-optimizer: 'AdamW'
+optimizer: 'Adam'
 epochs: 100
 batch_size: 256
-lr: 2.0e-5
+lr: 2.0e-4
 lr_policy: 'cosine'
-weight_decay: 0.
+weight_decay: 0.01
 verbose: True

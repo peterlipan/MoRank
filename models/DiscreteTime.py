@@ -62,7 +62,7 @@ class DiscreteTime(nn.Module):
         risk = - torch.sum(surv, dim=1)  # risk is the negative cumulative survival
         return ModelOutputs(features=features, logits=logits, hazards=hazards, surv=surv, risk=risk)
 
-    def compuite_loss(self, outputs, data):
+    def compute_loss(self, outputs, data):
         return self.criterion(
             outputs,
             data

@@ -7,19 +7,17 @@ from .utils import ModelOutputs
 
 class CDFLoss(nn.Module):
     def __init__(self, 
-                 cdf_weight: float = 1.0,
+                 cdf_weight: float = 1.,
                  monotonic_weight: float = 0.1,
                  sigma: float = 0.5,
                  margin: float = 1.,
-                 beta: float = 0.,
-                 rank_weight: float = 0.1,
+                 rank_weight: float = .1,
                  gamma: float = 0.5):
         super().__init__()
         self.sigma = sigma
         self.cdf_weight = cdf_weight
         self.monotonic_weight = monotonic_weight
         self.margin = margin
-        self.beta = beta
         self.rank_weight = rank_weight
         self.gamma = gamma
 
@@ -36,16 +34,36 @@ class CDFLoss(nn.Module):
         rank_mat = self.pair_rank_mat(durations, events)
         loss = rank_mat * torch.exp(-diff_risk / self.sigma)
         return loss.sum() / (rank_mat.sum() + 1e-6)
+    
+    def calibration_loss(self, F_pred: torch.Tensor, label: torch.Tensor, event: torch.Tensor) -> torch.Tensor:
+        """
+        Compare predicted marginal CDF against empirical event histogram.
+        Only use uncensored samples (event == 1).
+        """
+        B, T = F_pred.shape
+        device = F_pred.device
+
+        with torch.no_grad():
+            hist = torch.zeros(T, device=device)
+            mask = (event == 1)
+            times = label[mask]
+            hist.scatter_add_(0, times, torch.ones_like(times, dtype=torch.float32))
+
+        hist = hist / (hist.sum() + 1e-6)  # Normalize empirical histogram
+        pred_mass = F_pred[event == 1]     # Only use uncensored predictions
+        marginal_pred = pred_mass.sum(dim=0)
+        marginal_pred = marginal_pred / (marginal_pred.sum() + 1e-6)
+
+        return F.mse_loss(marginal_pred, hist)
 
     def forward(self, outputs, data):
         F_pred = outputs.cdf
-        logits = outputs.logits
         risk = outputs.risk
+        # cos_sim = outputs.cos_sim
         label = data['label']
         event = data['event']
-        durations = data.get('duration', label)
 
-        B, T = F_pred.shape
+        _, T = F_pred.shape
         device = F_pred.device
 
         time_idx = torch.arange(T, device=device).view(1, -1)
@@ -60,20 +78,18 @@ class CDFLoss(nn.Module):
 
         decay_weight = decay_weight * mask.float()
         cdf_loss = ((F_pred - target) ** 2 * decay_weight)[mask].sum() / (decay_weight[mask].sum() + 1e-6)
+        # bce_loss = F.binary_cross_entropy(F_pred, target, reduction='none')
+        # cdf_loss = (bce_loss * decay_weight)[mask].sum() / (decay_weight[mask].sum() + 1e-6)
 
         monotonic_penalty = F.relu(F_pred[:, :-1] - F_pred[:, 1:] + self.margin).mean()
 
-        # Apply weight norm regularization (on projection weights)
-        projection_weight = outputs.projection_weight
-        weight_reg = projection_weight.norm(2)
-
         rank_loss = self.rank_loss_on_risk(risk, label, event)
+        # calibration = self.calibration_loss(F_pred, label, event)
 
         total_loss = (
             self.cdf_weight * cdf_loss +
             self.monotonic_weight * monotonic_penalty +
-            self.rank_weight * rank_loss +
-            self.beta * weight_reg
+            self.rank_weight * rank_loss
         )
 
         return total_loss
@@ -97,38 +113,73 @@ class DeepCdf(nn.Module):
         # Linearly spaced fixed biases (learnable can be tested separately)
         time_idx = torch.linspace(-1, 1, self.n_classes)
         self.biases = nn.Parameter(time_idx, requires_grad=False)
+        # self.biases = nn.Parameter(torch.randn(self.n_classes), requires_grad=True)
 
         self.criterion = CDFLoss()
-        self.temp = 1.5
+        self.scaler = nn.Parameter(1. * torch.ones(1))  # Scale for logits
+        self.temp = nn.Parameter(torch.tensor(1.5))
 
     def forward(self, data):
+
+        # features = self.encoder(data['data'])
+        # proj = self.head(features)
+        # # multiply the biases by the magnitude of features and weights
+        # biases = self.biases.view(1, -1) * (features.norm(dim=1, keepdim=True) * self.head.weight.norm())
+        # logits = proj + biases # if self.training else proj + self.biases.view(1, -1)
+        # cdf = torch.sigmoid(logits * self.scaler)
+        # risk = proj.view(-1)  # [B * T]
+        # surv = 1. - cdf  # [B, T]
+
+
         features = self.encoder(data['data'])
-        proj = self.head(features)  # [B, 1]
-        logits = proj + self.biases.view(1, -1)
-        cdf = torch.sigmoid(logits / self.temp).clamp(0, 1)
-        risk = proj.view(-1)
-        surv = 1. - cdf
+        w = self.head.weight.squeeze(0)
+        w = F.normalize(w, dim=0, p=2)  # Normalize the weight vector
+        features = F.normalize(features, dim=1, p=2)  # Normalize the features
+        proj = features @ w  # [B, 1]
+        proj = proj.view(-1, 1)  # Reshape to [B, 1]
+        logits = proj + self.biases.view(1, -1)  # [B, T]
+        # logits = logits * self.scaler  # Scale the logits
+        cdf = torch.sigmoid(logits * self.scaler)
+        risk = proj.view(-1)  # [B * T]
+        surv = 1. - cdf  # [B, T]
+
+
+        # features = self.encoder(data['data'])
+        # proj = self.head(features)  # [B, 1]
+        # logits = proj + self.biases.view(1, -1)  # [B, T]
+        # cdf = torch.sigmoid(logits / self.temp)  # [B, T]
+        # risk = proj.view(-1)  # [B * T]
+        # surv = 1. - cdf        
+
+        # features_norm = F.normalize(features, dim=1, p=2)
+        # weight_norm = F.normalize(self.head.weight.squeeze(0), dim=0, p=2)
+        # cos_sim = features_norm @ weight_norm  # [B, 1]
+        # cos_sim = cos_sim.view(-1)
+        # risk = cos_sim
+
 
         return ModelOutputs(features=features,
                             logits=logits,
                             cdf=cdf,
                             risk=risk,
+                            # cos_sim=cos_sim,
                             surv=surv,
                             biases=self.biases,
                             projection_weight=self.head.weight.view(-1))
 
-    def compuite_loss(self, outputs, data):
+    def compute_loss(self, outputs, data):
         return self.criterion(outputs, data)
 
     def project_2d(self, data):
         features = self.encoder(data['data'])
+        features = F.normalize(features, dim=1, p=2)
         proj = self.head(features)
 
         w = self.head.weight.squeeze(0)
-        w = w / w.norm()
+        w = F.normalize(w, dim=0, p=2)
         v = torch.randn_like(w)
         v = v - (v @ w) * w
-        v = v / v.norm()
+        v = F.normalize(v, dim=0, p=2)
 
         proj_x = features @ w
         proj_y = features @ v

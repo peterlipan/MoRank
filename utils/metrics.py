@@ -53,8 +53,8 @@ def compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, times):
 
     cindex, *_ = concordance_index_censored(test_surv['event'], test_surv['time'], risk_prob)
     cindex_ipcw, *_ = concordance_index_ipcw(train_surv, test_surv, risk_prob)
-    ibs = integrated_brier_score(train_surv, test_surv, surv_prob, times)
-    auc, mean_auc = cumulative_dynamic_auc(train_surv, test_surv, 1 - surv_prob, times)
+    ibs = integrated_brier_score(train_surv, test_surv, surv_prob, times) if surv_prob is not None else 0
+    auc, mean_auc = cumulative_dynamic_auc(train_surv, test_surv, 1 - surv_prob, times) if surv_prob is not None else (0, 0)
     # set AUC as 0 if it is NaN
     if np.isnan(mean_auc):
         print(auc)

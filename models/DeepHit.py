@@ -55,7 +55,7 @@ class DeepHit(nn.Module):
         surv = 1. - cdf
         return ModelOutputs(features=features, logits=logits, pmf=pmf, risk=risk, cdf=cdf, surv=surv, fht=fht, prob_at_fht=prob_at_fht)
 
-    def compuite_loss(self, outputs, data):
+    def compute_loss(self, outputs, data):
         return self.criterion(
             outputs,
             data

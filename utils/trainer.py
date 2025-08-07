@@ -15,38 +15,26 @@ import matplotlib.cm as cm
 
 class MetricLogger:
     def __init__(self, n_folds):
-        self.fold = 0
         self.n_folds = n_folds
-        self.fold_metrics = [{} for _ in range(n_folds)] # save final metrics for each fold
-    
-    @property
-    def metrics(self):
-        return list(self.fold_metrics[self.fold].keys())
-    
-    def _set_fold(self, fold):
-        self.fold = fold
-    
-    def _empty_dict(self):
-        return {key: 0.0 for key in self.metrics}
+        self.fold_metrics = [{} for _ in range(n_folds)]
 
-    def update(self, metric_dict):
-        for key in metric_dict:
-            self.fold_metrics[self.fold][key] = metric_dict[key]
-    
-    def _fold_average(self):
-        if self.fold < self.n_folds - 1:
-            raise Warning("Not all folds have been completed.")
-        avg_metrics = self._empty_dict()
+    def update(self, metric_dict, fold):
+        self.fold_metrics[fold] = metric_dict
+
+    def metrics(self):
+        return list(self.fold_metrics[0].keys()) if self.fold_metrics[0] else []
+
+    def fold_average(self):
+        avg_metrics = {k: 0.0 for k in self.metrics()}
         for metric in avg_metrics:
-            for fold in self.fold_metrics:
-                avg_metrics[metric] += fold[metric]
-            avg_metrics[metric] /= self.n_folds
-        
+            avg_metrics[metric] = np.mean([fold[metric] for fold in self.fold_metrics])
         return avg_metrics
+
 
 
 class Trainer:
     def __init__(self, args, wb_logger=None, val_steps=None):
+        self.args = args
         self.wb_logger = wb_logger
         self.val_steps = val_steps
         self.verbose = args.verbose
@@ -54,8 +42,8 @@ class Trainer:
         os.makedirs(args.checkpoints, exist_ok=True)
         os.makedirs(args.results, exist_ok=True)
     
-    def _init_components(self, args):
-
+    def _init_components(self):
+        args = self.args
         print(f"Train dataset size: {len(self.train_dataset)}, Test dataset size: {len(self.test_dataset)}")
 
         self.train_loader = DataLoader(self.train_dataset, batch_size=args.batch_size, 
@@ -80,47 +68,80 @@ class Trainer:
             self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=5)
         elif args.lr_policy == 'multi_step':
             self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[18, 19], gamma=0.1)  
+        
+    def official_train_test(self):
+        # non-kfold training
+        args = self.args
+        dataset = CreateDataset(args)
+        self.train_dataset, self.test_dataset = dataset.get_official_train_test()
+        self._init_components()
 
-    def kfold_train(self, args):
+        self.fold = 0
+
+        self.train()
+        metric_dict = self.validate()
+        self.m_logger.update(metric_dict, self.fold)
+        if self.verbose:
+            print('-'*20, 'Metrics', '-'*20)
+        print(metric_dict)
+        if args.method == 'deepcdf' and args.n_bins > 0:
+            self._fold_plot_2d(metric_dict, self.test_loader, training_set=False)
+            self._fold_plot_2d(metric_dict, self.train_loader, training_set=True)
+        # self.fold_univariate_cox_regression_analysis(args, self.fold)
+        self._save_fold_avg_results(metric_dict)
+
+    def kfold_train(self):
+        args = self.args
         dataset = CreateDataset(args)
 
         for fold, (train_dataset, test_dataset) in enumerate(dataset.get_kfold_datasets()):
             self.train_dataset = train_dataset
             self.test_dataset = test_dataset
             self.fold = fold
-            self.m_logger._set_fold(fold)
 
-            self._init_components(args)
+            self._init_components()
 
-            self.train(args)
+            self.train()
 
             # validate for the fold
-            metric_dict = self.validate(args)
-            self.m_logger.update(metric_dict)
+            metric_dict = self.validate()
+            self.m_logger.update(metric_dict, fold)
             if self.verbose:
                 print('-'*20, f'Fold {fold} Metrics', '-'*20)
             print(metric_dict)
             if args.method == 'deepcdf' and args.n_bins > 0:
-                self._fold_plot_2d(args, fold, metric_dict, self.test_loader, training_set=False)
-                self._fold_plot_2d(args, fold, metric_dict, self.train_loader, training_set=True)
+                self._fold_plot_2d(metric_dict, self.test_loader, training_set=False)
+                self._fold_plot_2d(metric_dict, self.train_loader, training_set=True)
+                self.plot_risk_cdf_curves(self.train_loader, training_set=True)
+                self.plot_risk_cdf_curves(self.test_loader, training_set=False)
 
             # self.fold_univariate_cox_regression_analysis(args, fold)
-        
-        avg_metrics = self.m_logger._fold_average()
+
+        avg_metrics = self.m_logger.fold_average()
         print('-'*20, 'Average Metrics', '-'*20)
         print(avg_metrics)
-        self._save_fold_avg_results(args, avg_metrics)
-        self.save_model(args)
+        self._save_fold_avg_results(avg_metrics)
 
-    def train(self, args):
+    def run(self):
+        args = self.args
+        if args.kfold > 1:
+            self.kfold_train()
+        else:
+            self.official_train_test()
+
+        # save the model
+        # self.save_model(args)
+
+    def train(self):
+        args = self.args
         self.model.train()
         cur_iters = 0
         for i in range(args.epochs):
             for data in self.train_loader:
                 data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
-        
+
                 outputs = self.model(data)
-                loss = self.model.compuite_loss(outputs, data)
+                loss = self.model.compute_loss(outputs, data)
                 print(f"Fold {self.fold} | Epoch {i} | Iter {cur_iters} | Loss: {loss.item()}")
 
                 self.optimizer.zero_grad()
@@ -138,7 +159,7 @@ class Trainer:
                     if cur_iters % self.val_steps == 0:
 
                         cur_lr = self.optimizer.param_groups[0]['lr']
-                        metric_dict = self.validate(args)
+                        metric_dict = self.validate()
                         print(f"Fold {self.fold} | Epoch {i} | Loss: {metric_dict['Loss']} | C-index: {metric_dict['C-index']} | LR: {cur_lr}")
                         if self.wb_logger is not None:
                             self.wb_logger.log({f"Fold_{self.fold}": {
@@ -146,7 +167,8 @@ class Trainer:
                                 'Test': metric_dict
                             }})
 
-    def validate(self, args):
+    def validate(self):
+        args = self.args
         training = self.model.training
         self.model.eval()
 
@@ -166,19 +188,22 @@ class Trainer:
             for data in self.test_loader:
                 data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
                 outputs = self.model(data)
-                batch_loss = self.model.compuite_loss(outputs, data)
+                batch_loss = self.model.compute_loss(outputs, data)
                 loss += batch_loss.item()
                 
                 risk = outputs.risk
                 event_indicator = torch.cat((event_indicator, data['event']), dim=0)
                 duration = torch.cat((duration, data['duration']), dim=0)
                 risk_prob = torch.cat((risk_prob, risk), dim=0)
-                surv_prob = torch.cat((surv_prob, outputs.surv), dim=0)
+                if hasattr(outputs, 'surv'):
+                    surv_prob = torch.cat((surv_prob, outputs.surv), dim=0)
+                else:
+                    surv_prob = None
             
             event_indicator = event_indicator.cpu().detach().numpy().astype(bool)
             duration = duration.cpu().detach().numpy()
             risk_prob = risk_prob.cpu().detach().numpy()
-            surv_prob = surv_prob.cpu().detach().numpy()
+            surv_prob = surv_prob.cpu().detach().numpy() if surv_prob is not None else None
             test_surv = Surv.from_arrays(event=event_indicator, time=duration)
 
             n_eval = int(args.n_bins * 10) if args.n_bins > 0 else 3000
@@ -188,7 +213,7 @@ class Trainer:
             time_labels = self.test_dataset._duration_to_label(time_points)
             # print(f"Time points: {time_points}, Time labels: {time_labels}")
             # retrieve the surv probabilities at the time points
-            surv_prob = surv_prob[:, time_labels]
+            surv_prob = surv_prob[:, time_labels] if surv_prob is not None else None
 
             metric_dict = compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, time_points)
             metric_dict['Loss'] = loss / len(self.test_loader)
@@ -197,14 +222,15 @@ class Trainer:
 
         return metric_dict
     
-    def save_model(self, args):
+    def save_model(self):
+        args = self.args
         model_name = f"{args.method}_{args.backbone}.pt"
         save_path = os.path.join(args.checkpoints, model_name)
         torch.save(self.model.state_dict(), save_path)
 
-    def _save_fold_avg_results(self, args, metric_dict, keep_best=True):
+    def _save_fold_avg_results(self, metric_dict, keep_best=True):
         # keep_best: whether save the best model (highest mcc) for each fold
-
+        args = self.args
         df_name = f"{args.kfold}Fold_{args.dataset}.xlsx"
         res_path = args.results
 
@@ -213,7 +239,7 @@ class Trainer:
 
         set2kwargs = {k: v for k, v in zip(settings, kwargs )}
 
-        metric_names = self.m_logger.metrics
+        metric_names = self.m_logger.metrics()
         df_columns = settings + metric_names
         
         df_path = os.path.join(res_path, df_name)
@@ -241,7 +267,9 @@ class Trainer:
         df = df._append(new_row, ignore_index=True)
         df.to_excel(df_path, index=False)
         
-    def fold_univariate_cox_regression_analysis(self, args, fold):
+    def fold_univariate_cox_regression_analysis(self):
+        args = self.args
+        fold = self.fold
         training = self.model.training
         self.model.eval()
 
@@ -301,11 +329,14 @@ class Trainer:
 
         self.model.train(training)       
     
-    def _fold_plot_2d(self, args, fold, metric_dict, dataloader, training_set, uncensored=True):
+    def _fold_plot_2d(self, metric_dict, dataloader, training_set, uncensored=True):
+        args = self.args
+        fold = self.fold
         training = self.model.training
         suffix = '_training' if training_set else ''
         self.model.eval()
-        save_path = os.path.join(args.results, f"Fold_{fold}_{args.method}{suffix}.png")
+        save_path = os.path.join(args.results, args.dataset, f"Fold_{fold}_{args.method}{suffix}.png")
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
         # Storage
         coord_x = torch.Tensor().cuda()
@@ -371,3 +402,54 @@ class Trainer:
         # Restore training state
         self.model.train(training)
 
+    def plot_risk_cdf_curves(self, dataloader, training_set=False):
+        args = self.args
+        fold = self.fold
+        self.model.eval()
+        training = self.model.training
+        suffix = '_training' if training_set else ''
+        save_path = os.path.join(args.results, args.dataset, f"Fold_{fold}_CDFRiskCurves{suffix}.png")
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        cdfs, labels = [], []
+        with torch.no_grad():
+            for data in dataloader:
+                data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
+                outputs = self.model(data)  # Should return logits internally passed through sigmoid → CDF
+                cdfs.append(outputs.cdf.cpu())
+                labels.append(data['label'].cpu())
+
+        # Stack everything
+        cdfs = torch.cat(cdfs, dim=0).numpy()
+        labels = torch.cat(labels, dim=0).numpy()
+
+        # Sort by risk
+        lowest_time_idx = np.min(labels)
+        highest_time_idx = np.max(labels)
+        median_time_idx = np.median(labels).astype(int)
+
+        lowest_avg_cdf = np.mean(cdfs[labels == lowest_time_idx], axis=0)
+        highest_avg_cdf = np.mean(cdfs[labels == highest_time_idx], axis=0)
+        median_avg_cdf = np.mean(cdfs[labels == median_time_idx], axis=0)
+
+        # Time bins
+        time_bins = np.arange(cdfs.shape[1])
+
+        # Plot
+        plt.figure(figsize=(8, 6))
+
+        for cdf, color, time_idx in zip([lowest_avg_cdf, median_avg_cdf, highest_avg_cdf],
+                                    ['red', 'orange', 'green'],
+                                    [lowest_time_idx, median_time_idx, highest_time_idx]):
+            plt.plot(time_bins, cdf, label=f"Label = {time_idx}", color=color)
+            # plt.axvline(labels[idx], color=color, linestyle='--', alpha=0.7)
+
+        plt.xlabel("Time Bin Index")
+        plt.ylabel("Predicted CDF")
+        plt.title(f"Fold {fold} — CDF Curves by Risk Stratification")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        self.model.train(training)

@@ -39,7 +39,7 @@ class DeepSurv(nn.Module):
         risk = torch.sigmoid(logits).view(-1) 
         return ModelOutputs(features=features, logits=logits, risk=risk)
 
-    def compuite_loss(self, outputs, data):
+    def compute_loss(self, outputs, data):
         return self.criterion(
             outputs,
             data

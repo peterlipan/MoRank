@@ -16,7 +16,13 @@ class ModelOutputs:
         return str(self.dict)
 
     def __getattr__(self, key):
-        return self.dict[key]
+        try:
+            return self.dict[key]
+        except KeyError as e:
+            raise AttributeError(f"'ModelOutputs' object has no attribute '{key}'") from e
+
+    def __contains__(self, key):
+        return key in self.dict
 
 
 def CreateModel(args):
@@ -32,5 +38,11 @@ def CreateModel(args):
     elif args.method.lower() == 'discrete':
         from .DiscreteTime import DiscreteTime
         return DiscreteTime(args)
+    elif args.method.lower() == 'angularord':
+        from .AngularOrd import AngularOrdRep
+        return AngularOrdRep(args)
+    elif args.method.lower() == 'ordsoftmax':
+        from .OrdSoftmax import OrdSoftmax
+        return OrdSoftmax(args)
     else:
-        raise ValueError(f"Unknown method: {args.method}. Supported methods are: DeepHit, DeepCdf, DeepSurv.")
+        raise ValueError(f"Unknown method: {args.method}. Supported methods are: DeepHit, DeepCdf, DeepSurv, AngularOrd.")
