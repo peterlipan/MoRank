@@ -11,10 +11,10 @@ results: './results'
 
 kfold: 5
 stratify: True
-n_bins: 25
+n_bins: 18
 
 # model
-method: 'ordsoftmax' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+method: 'vmf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax', 'vmf'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024

@@ -3,17 +3,17 @@ visible_gpus: '0'
 seed: 42
 
 # dataset
-dataset: 'support'
+dataset: 'gbsg'
 checkpoints: './checkpoints'
 results: './results'
 
 kfold: 5
 stratify: True
-n_bins: 18
-normalize: True
+n_bins: 25
+normalize: False
 
 # model
-method: 'vmf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+method: 'deepcdf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024

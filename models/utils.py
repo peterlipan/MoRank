@@ -44,5 +44,8 @@ def CreateModel(args):
     elif args.method.lower() == 'ordsoftmax':
         from .OrdSoftmax import OrdSoftmax
         return OrdSoftmax(args)
+    elif args.method.lower() == 'vmf':
+        from .vmf import VmfOrdinalModel
+        return VmfOrdinalModel(args)
     else:
         raise ValueError(f"Unknown method: {args.method}. Supported methods are: DeepHit, DeepCdf, DeepSurv, AngularOrd.")

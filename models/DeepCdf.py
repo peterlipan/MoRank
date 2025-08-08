@@ -10,7 +10,7 @@ class CDFLoss(nn.Module):
                  cdf_weight: float = 1.,
                  monotonic_weight: float = 0.1,
                  sigma: float = 0.5,
-                 margin: float = 1.,
+                 margin: float = 0.,
                  rank_weight: float = .1,
                  gamma: float = 0.5):
         super().__init__()

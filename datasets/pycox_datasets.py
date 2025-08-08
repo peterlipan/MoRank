@@ -21,7 +21,7 @@ class PycoxDataset:
 
         if n_bins > 0:
             self.bin_durations(n_bins)
-            self.n_classes = n_bins + 10  # for edge bins
+            self.n_classes = n_bins + 2  # for edge bins
         else:
             self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
             self.label = self.duration.astype(np.int64)
@@ -46,11 +46,11 @@ class PycoxDataset:
     def bin_durations(self, n_bins):
         # Bin duration using quantiles (equal number of samples per bin)
         self.bin_edges = np.quantile(self.duration, q=np.linspace(0, 1, n_bins + 1))
-        self.label = np.digitize(self.duration, self.bin_edges[1:-1]).astype(np.int64) + 5
+        self.label = np.digitize(self.duration, self.bin_edges[1:-1]).astype(np.int64) + 1
 
     def _duration_to_label(self, duration):
         if self.n_bins > 0:
-            return np.digitize(duration, self.bin_edges[1:-1]).astype(np.int64) + 5
+            return np.digitize(duration, self.bin_edges[1:-1]).astype(np.int64) + 1
         else:
             return duration.astype(np.int64)
     
