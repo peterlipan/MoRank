@@ -24,7 +24,7 @@ def main(args, logger):
 if __name__ == '__main__':
     warnings.filterwarnings("ignore")
     parser = argparse.ArgumentParser()
-    yaml_config = yaml_config_hook("./configs/support.yaml")
+    yaml_config = yaml_config_hook("./configs/gbmlgg.yaml")
     for k, v in yaml_config.items():
         parser.add_argument(f"--{k}", default=v, type=type(v))
     parser.add_argument('--debug', action="store_true", help='debug mode(disable wandb)')

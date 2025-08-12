@@ -1,5 +1,5 @@
 # environment
-visible_gpus: '0'
+visible_gpus: '1'
 seed: 42
 
 # dataset
@@ -14,7 +14,7 @@ stratify: True
 n_bins: 18
 
 # model
-method: 'vmf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax', 'vmf'
+method: 'deepcdf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax', 'vmf'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024

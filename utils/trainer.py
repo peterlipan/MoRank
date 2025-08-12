@@ -148,7 +148,7 @@ class Trainer:
                 loss.backward()
 
                 # clip gradients to avoid exploding gradients
-                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, norm_type=2)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, norm_type=2)
 
                 self.optimizer.step()
                 if self.scheduler is not None:
@@ -234,8 +234,8 @@ class Trainer:
         df_name = f"{args.kfold}Fold_{args.dataset}.xlsx"
         res_path = args.results
 
-        settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed', 'Hidden Dimensions', 'layers', 'Bins']
-        kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed', 'd_hid', 'n_layers', 'n_bins']
+        settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed', 'Bins']
+        kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed', 'n_bins']
 
         set2kwargs = {k: v for k, v in zip(settings, kwargs )}
 

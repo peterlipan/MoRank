@@ -2,6 +2,9 @@ import os
 import pickle
 import pandas as pd
 import numpy as np
+from PIL import Image
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 from sklearn.model_selection import KFold
 
 
@@ -30,7 +33,8 @@ def aggregate_data(root, dst):
     event = np.concatenate([train_event, test_event]).astype(np.int64)
     duration = np.concatenate([train_duration, test_duration]).astype(np.float32)
 
-    path = [p.replace("./data/TCGA_GBMLGG", "") for p in path] # keep relative path
+    path = [p.replace("./data/TCGA_GBMLGG/", "") for p in path] # keep relative path
+    path = [os.path.join(root, p) for p in path]  # absolute path
 
     # merge to a pickle file
     data = {
@@ -53,9 +57,39 @@ class TcgaGbmLggData:
         self.stratify = stratify
         self.kfold = kfold
         self.seed = seed
-        self.imgae_size = 1024
+        self.n_features = 1024       
+        
+        self.train_transform = A.Compose([
+            A.Resize(height=self.n_features, width=self.n_features),
+            A.HorizontalFlip(p=.5),
+            A.VerticalFlip(p=.5),
+            A.RandomRotate90(p=.5),
+            A.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.2, rotate_limit=45, p=.5),
+            A.OneOf([
+                    A.ElasticTransform(p=.5),
+                    A.GridDistortion(p=.5),
+                    A.OpticalDistortion(p=.5),
+                ], p=.5),
+            A.OneOf([
+                A.RandomGridShuffle(grid=(3, 3), p=.5),
+                A.RandomGridShuffle(grid=(7, 7), p=.5),
+                A.RandomGridShuffle(grid=(11, 11), p=.5),
+            ], p=.5),
+            A.ColorJitter(p=.5),
+            A.RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.5),
+            A.ChannelShuffle(p=.5),
+            A.RandomBrightnessContrast(p=0.5),
+            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ToTensorV2(),
+        ])
+        self.test_transform = A.Compose([
+            A.Resize(height=self.n_features, width=self.n_features),
+            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ToTensorV2(),
+        ])
 
         if not os.path.exists(self.pickle_path):
+            os.makedirs(os.path.dirname(self.pickle_path), exist_ok=True)
             aggregate_data(self.data_root, self.pickle_path)
 
         # Load the aggregated data
@@ -67,6 +101,7 @@ class TcgaGbmLggData:
         self.event = data['event']
         self.patient = data['patient']
         self.path = data['path']
+        self.grade = data['grade']
 
         if n_bins > 0:
             self.bin_durations(n_bins)
@@ -87,26 +122,53 @@ class TcgaGbmLggData:
             return duration.astype(np.int64)
     
     def get_kfold_datasets(self):
+        # kfold on the patient level
+        pid = np.unique(self.patient)
+        patient_event = np.array([self.event[self.patient == p][0] for p in pid])
         if self.stratify:
             kf = KFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
-            for train_idx, test_idx in kf.split(self.omic, self.event):
-                yield TcgaGbmLggDataset(self, train_idx), TcgaGbmLggDataset(self, test_idx)
+            for train_idx, test_idx in kf.split(pid, patient_event):
+                train_idx = np.where(np.isin(self.patient, pid[train_idx]))[0]
+                test_idx = np.where(np.isin(self.patient, pid[test_idx]))[0]
+                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform), TcgaGbmLggImageDataset(self, test_idx, self.test_transform)
         else:
             kf = KFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
-            for train_idx, test_idx in kf.split(self.omic):
-                yield TcgaGbmLggDataset(self, train_idx), TcgaGbmLggDataset(self, test_idx)
-                
-class TcgaGbmLggDataset:
-    def __init__(self, tcga_data, indices):
-        self.omic = tcga_data.omic[indices]
+            for train_idx, test_idx in kf.split(pid):
+                train_idx = np.where(np.isin(self.patient, pid[train_idx]))[0]
+                test_idx = np.where(np.isin(self.patient, pid[test_idx]))[0]
+                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform), TcgaGbmLggImageDataset(self, test_idx, self.test_transform)
+
+
+class TcgaGbmLggImageDataset:
+    def __init__(self, tcga_data, indices, transform):
         self.duration = tcga_data.duration[indices]
         self.event = tcga_data.event[indices]
         self.label = tcga_data.label[indices] if hasattr(tcga_data, 'label') else self.duration.astype(np.int64)
         self.patient = tcga_data.patient[indices]
         self.path = [tcga_data.path[i] for i in indices]
-        self.n_features = tcga_data.omic.shape[1]
+        self.n_features = tcga_data.n_features
         self.n_classes = tcga_data.n_classes
         self.n_events = np.unique(self.event).size
+        self.transform = transform
+        self._duration_to_label = tcga_data._duration_to_label
+
+    def __len__(self):
+        return len(self.path)
+    
+    def __getitem__(self, idx):
+        image_path = os.path.join(self.path[idx])
+        image = Image.open(image_path).convert('RGB')
+        image = np.array(image)
+
+        if self.transform:
+            image = self.transform(image=image)['image']
+
+        return {
+            'data': image,
+            'duration': self.duration[idx],
+            'event': self.event[idx],
+            'label': self.label[idx],
+        }
 
 
 

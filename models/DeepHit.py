@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbone import MLP
+from .backbone import get_encoder
 from .utils import ModelOutputs
 from pycox.models.loss import DeepHitSingleLoss
 
@@ -31,15 +31,10 @@ class DeepHit(nn.Module):
     def __init__(self, args):
         super(DeepHit, self).__init__()
         
-        self.encoder = MLP(
-            d_in=args.n_features,
-            d_hid=args.d_hid,
-            d_out=args.d_hid,
-            n_layers=args.n_layers, # Number of encoder layers
-            dropout=args.dropout,
-            activation=args.activation
-        )
-        self.head = nn.Linear(args.d_hid, args.n_classes)
+        self.encoder = get_encoder(args)
+        self.d_hid = args.d_hid if hasattr(args, 'd_hid') else self.encoder.d_hid
+        self.n_classes = args.n_classes
+        self.head = nn.Linear(self.d_hid, args.n_classes)
         self.n_classes = args.n_classes
         self.criterion = DeepHitsurvLoss()
     

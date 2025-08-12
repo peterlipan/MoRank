@@ -18,3 +18,6 @@ def CreateDataset(args):
     elif args.dataset.lower() == 'nwtco':
         from .pycox_datasets import NWTCOData
         return NWTCOData(n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed, normalize=args.normalize)
+    elif args.dataset.lower() == 'gbmlgg':
+        from .tcga_gbmlgg import TcgaGbmLggData
+        return TcgaGbmLggData(data_root=args.data_root, pickle_path=args.pickle_path, n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed)

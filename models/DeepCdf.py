@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbone import MLP
+from .backbone import get_encoder
 from .utils import ModelOutputs
 
 
@@ -99,16 +99,10 @@ class DeepCdf(nn.Module):
     def __init__(self, args):
         super(DeepCdf, self).__init__()
         
-        self.encoder = MLP(
-            d_in=args.n_features,
-            d_hid=args.d_hid,
-            d_out=args.d_hid,
-            n_layers=args.n_layers,
-            dropout=args.dropout,
-            activation=args.activation
-        )
+        self.encoder = get_encoder(args)
+        self.d_hid = args.d_hid if hasattr(args, 'd_hid') else self.encoder.d_hid
         self.n_classes = args.n_classes
-        self.head = nn.Linear(args.d_hid, 1, bias=False)
+        self.head = nn.Linear(self.d_hid, 1, bias=False)
 
         # Linearly spaced fixed biases (learnable can be tested separately)
         time_idx = torch.linspace(-1, 1, self.n_classes)

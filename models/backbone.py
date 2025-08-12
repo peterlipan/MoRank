@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .MyViT import ViTModel, ViTConfig
 
 
 class MLP(nn.Module):
@@ -43,3 +44,32 @@ class MLP(nn.Module):
             return nn.LeakyReLU(negative_slope=0.1)
         else:
             raise ValueError(f"Unsupported activation function: {name}")
+
+
+class VisionTransformer(nn.Module):
+    def __init__(self, n_features, patch_size, pretrained=""):
+        super(VisionTransformer, self).__init__()
+        config = ViTConfig.from_pretrained(pretrained) if pretrained else ViTConfig()
+        config.image_size = n_features
+        config.patch_size = patch_size
+        self.config = config
+        self.d_hid = config.hidden_size
+        self.vit = ViTModel(config, add_pooling_layer=False, use_cls_token=False)
+        if pretrained:
+            self.vit = ViTModel.from_pretrained(pretrained, config=config, add_pooling_layer=False, use_cls_token=False, ignore_mismatched_sizes=True)
+        self.pooler = nn.AdaptiveAvgPool1d(1)
+
+    def forward(self, x):
+        outputs = self.vit(x)
+        sequence_output = outputs.last_hidden_state
+        pooled_output = self.pooler(sequence_output.transpose(1, 2)).squeeze(-1)
+        return pooled_output
+
+
+def get_encoder(args):
+    if args.backbone == 'mlp':
+        return MLP(d_in=args.n_features, d_hid=args.d_hid, d_out=args.d_hid, n_layers=args.n_layers, dropout=args.dropout, activation=args.activation)
+    elif args.backbone == 'vit':
+        return VisionTransformer(n_features=args.n_features, patch_size=args.patch_size, pretrained=args.pretrained)
+    else:
+        raise ValueError(f"Unsupported backbone: {args.backbone}")

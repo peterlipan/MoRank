@@ -1,0 +1,32 @@
+# environment
+visible_gpus: '1'
+seed: 42
+
+# dataset
+dataset: 'gbmlgg'
+data_root: "/datastorage/li/TCGA_GBMLGG"
+pickle_path: "./datasets/TCGA_GBMLGG/tcga_gbmlgg.pkl"
+checkpoints: './checkpoints'
+results: './results'
+
+kfold: 5
+stratify: True
+n_bins: 25
+normalize: False
+
+# model
+method: 'discrete' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+backbone: 'vit'
+patch_size: 16
+pretrained: "WinKawaks/vit-tiny-patch16-224"
+
+
+# training
+workers: 0
+optimizer: 'Adam'
+epochs: 50
+batch_size: 6
+lr: 2.0e-5
+lr_policy: 'cosine'
+weight_decay: 0.01
+verbose: True
