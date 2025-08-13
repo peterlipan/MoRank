@@ -4,6 +4,7 @@ seed: 42
 
 # dataset
 dataset: 'gbmlgg'
+task: 'survival'
 data_root: "/datastorage/li/TCGA_GBMLGG"
 pickle_path: "./datasets/TCGA_GBMLGG/tcga_gbmlgg.pkl"
 checkpoints: './checkpoints'
@@ -15,17 +16,18 @@ n_bins: 25
 normalize: False
 
 # model
-method: 'discrete' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
-backbone: 'vit'
+method: 'ordsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+backbone: 'resnet18'
 patch_size: 16
-pretrained: "WinKawaks/vit-tiny-patch16-224"
+# pretrained: "WinKawaks/vit-tiny-patch16-224"
+pretrained: True
 
 
 # training
 workers: 0
 optimizer: 'Adam'
 epochs: 50
-batch_size: 6
+batch_size: 324
 lr: 2.0e-5
 lr_policy: 'cosine'
 weight_decay: 0.01

@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from .backbone import get_encoder
 from .utils import ModelOutputs
 from pycox.models.loss import CoxPHLoss
+import torchtuples as tt
+from pycox.models import CoxPH
 
 
 class CoxSurvLoss(nn.Module):
@@ -13,8 +15,8 @@ class CoxSurvLoss(nn.Module):
         self.eps = eps
     def forward(self, outputs, data):
         # directly predict the risk factors
-        risk_clamped = outputs.risk.clamp(min=self.eps) # for numerical stability
-        return self.cph(risk_clamped.log(), data['duration'], data['event'])
+        # risk_clamped = outputs.risk.clamp(min=self.eps) # for numerical stability
+        return self.cph(outputs.risk, data['duration'], data['event'])
 
 
 class DeepSurv(nn.Module):
@@ -30,8 +32,10 @@ class DeepSurv(nn.Module):
     def forward(self, data):
         features = self.encoder(data['data'])
         logits = self.head(features)
-        risk = torch.sigmoid(logits).view(-1) 
-        return ModelOutputs(features=features, logits=logits, risk=risk)
+        risk = logits.view(-1)
+        return ModelOutputs(features=features, logits=logits, risk=risk)        
+
+
 
     def compute_loss(self, outputs, data):
         return self.criterion(

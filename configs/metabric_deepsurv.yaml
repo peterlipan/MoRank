@@ -4,6 +4,7 @@ seed: 42
 
 # dataset
 dataset: 'metabric_deepsurv'
+task: 'survival'
 file_path: './datasets/deepsurv/metabric_IHC4_clinical_train_test.h5'
 checkpoints: './checkpoints'
 results: './results'

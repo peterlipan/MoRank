@@ -29,9 +29,9 @@ def CreateModel(args):
     if args.method.lower() == 'deephit':
         from .DeepHit import DeepHit
         return DeepHit(args)
-    elif args.method.lower() == 'deepcdf':
-        from .DeepCdf import DeepCdf
-        return DeepCdf(args)
+    elif args.method.lower() == 'ordsurv':
+        from .OrdSurv import OrdSurv
+        return OrdSurv(args)
     elif args.method.lower() == 'deepsurv':
         from .DeepSurv import DeepSurv
         return DeepSurv(args)
@@ -47,5 +47,11 @@ def CreateModel(args):
     elif args.method.lower() == 'vmf':
         from .vmf import VmfOrdinalModel
         return VmfOrdinalModel(args)
+    elif args.method.lower() == 'softmax':
+        from .Softmax import SoftmaxClassifier
+        return SoftmaxClassifier(args)
+    elif args.method.lower() == 'ordcls':
+        from .OrdCls import OrdCls
+        return OrdCls(args)
     else:
-        raise ValueError(f"Unknown method: {args.method}. Supported methods are: DeepHit, DeepCdf, DeepSurv, AngularOrd.")
+        raise ValueError(f"Unknown method: {args.method}.")

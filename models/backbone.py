@@ -1,4 +1,5 @@
 import torch
+import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 from .MyViT import ViTModel, ViTConfig
@@ -66,10 +67,34 @@ class VisionTransformer(nn.Module):
         return pooled_output
 
 
+class TorchVisionModels(nn.Module):
+    def __init__(self, model_name, pretrained=True):
+        super(TorchVisionModels, self).__init__()
+        model = getattr(torchvision.models, model_name)(pretrained=pretrained)
+        if model_name.startswith('resnet'):
+            self.d_hid = model.fc.in_features
+            model.fc = nn.Identity()
+        
+        elif model_name.startswith('densenet'):
+            self.d_hid = model.classifier.in_features
+            model.classifier = nn.Identity()
+        
+        elif model_name.startswith('efficientnet'):
+            self.d_hid = model.classifier[1].in_features
+            model.classifier[1] = nn.Identity()
+        else:
+            raise ValueError(f"Unsupported model: {model_name}")
+        
+        self.model = model
+
+    def forward(self, x):
+        return self.model(x)
+
+
 def get_encoder(args):
     if args.backbone == 'mlp':
         return MLP(d_in=args.n_features, d_hid=args.d_hid, d_out=args.d_hid, n_layers=args.n_layers, dropout=args.dropout, activation=args.activation)
     elif args.backbone == 'vit':
         return VisionTransformer(n_features=args.n_features, patch_size=args.patch_size, pretrained=args.pretrained)
     else:
-        raise ValueError(f"Unsupported backbone: {args.backbone}")
+        return TorchVisionModels(model_name=args.backbone, pretrained=args.pretrained)

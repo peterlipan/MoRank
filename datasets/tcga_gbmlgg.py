@@ -50,14 +50,15 @@ def aggregate_data(root, dst):
 
 
 class TcgaGbmLggData:
-    def __init__(self, data_root, pickle_path, n_bins=-1, stratify=False, kfold=5, seed=42):
+    def __init__(self, data_root, pickle_path, backbone, n_bins=-1, stratify=False, kfold=5, seed=42):
         self.data_root = data_root
         self.pickle_path = pickle_path
         self.n_bins = n_bins
         self.stratify = stratify
         self.kfold = kfold
         self.seed = seed
-        self.n_features = 1024       
+        self.backbone = backbone
+        self.n_features = 224 if backbone.startswith(('resnet', 'densenet', 'efficient')) else 1024  # RNNs are fixed to 224. Use original size for Vision Transformers
         
         self.train_transform = A.Compose([
             A.Resize(height=self.n_features, width=self.n_features),

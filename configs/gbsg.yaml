@@ -4,6 +4,7 @@ seed: 42
 
 # dataset
 dataset: 'gbsg'
+task: 'survival'
 checkpoints: './checkpoints'
 results: './results'
 

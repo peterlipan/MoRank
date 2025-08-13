@@ -20,4 +20,8 @@ def CreateDataset(args):
         return NWTCOData(n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed, normalize=args.normalize)
     elif args.dataset.lower() == 'gbmlgg':
         from .tcga_gbmlgg import TcgaGbmLggData
-        return TcgaGbmLggData(data_root=args.data_root, pickle_path=args.pickle_path, n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed)
+        return TcgaGbmLggData(data_root=args.data_root, pickle_path=args.pickle_path, backbone=args.backbone,
+                              n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed)
+    elif args.dataset.lower() == 'eyepacs':
+        from .eyepacs import EyepacsData
+        return EyepacsData(root=args.data_root, backbone=args.backbone)

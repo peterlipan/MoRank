@@ -4,6 +4,7 @@ seed: 42
 
 # dataset
 dataset: 'metabric_kfold'
+task: 'survival'
 feature_file: './datasets/METABRIC/cleaned_features_final.csv'
 label_file: './datasets/METABRIC/label.csv'
 checkpoints: './checkpoints'
