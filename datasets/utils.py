@@ -1,11 +1,8 @@
 def CreateDataset(args):
-    if args.dataset.lower() == 'metabric_kfold':
-        from .metabric_kfold import METABRICData
+    if args.dataset.lower() == 'metabric':
+        from .metabric_deephit import METABRICData
         return METABRICData(feature_file=args.feature_file, label_file=args.label_file, 
                             n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed)
-    elif args.dataset.lower() == 'metabric_deepsurv':
-        from .metabric_deepsurv import METABRICData
-        return METABRICData(file_path=args.file_path, n_bins=args.n_bins)
     elif args.dataset.lower() == 'support':
         from .pycox_datasets import SupportDataset
         return SupportDataset(n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed, normalize=args.normalize)

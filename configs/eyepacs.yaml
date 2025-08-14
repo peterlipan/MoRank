@@ -1,5 +1,5 @@
 # environment
-visible_gpus: '0'
+visible_gpus: '1'
 seed: 42
 
 # dataset
@@ -12,7 +12,7 @@ results: './results'
 kfold: 1 # disable kfold and use the official splits
 
 # model
-method: 'softmax' # 'softmax', 'ordcls'
+method: 'ordcls' # 'softmax', 'ordcls'
 backbone: 'resnet18'
 pretrained: True
 alpha: 0.5
@@ -22,8 +22,8 @@ alpha: 0.5
 workers: 0
 optimizer: 'Adam'
 epochs: 50
-batch_size: 256
-lr: 2.0e-5
+batch_size: 512
+lr: 2.0e-4
 lr_policy: 'cosine'
 weight_decay: 0.01
 verbose: True

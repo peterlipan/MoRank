@@ -11,7 +11,7 @@ class CDFLoss(nn.Module):
                  monotonic_weight: float = 0.1,
                  sigma: float = 0.5,
                  margin: float = 0.,
-                 rank_weight: float = .1,
+                 rank_weight: float = 0.1,
                  gamma: float = 0.5):
         super().__init__()
         self.sigma = sigma
@@ -109,7 +109,6 @@ class OrdSurv(nn.Module):
 
         self.criterion = CDFLoss()
         self.scaler = nn.Parameter(1. * torch.ones(1))  # Scale for logits
-        self.temp = nn.Parameter(torch.tensor(1.5))
 
     def forward(self, data):
 
@@ -122,24 +121,23 @@ class OrdSurv(nn.Module):
         # risk = proj.view(-1)  # [B * T]
         # surv = 1. - cdf  # [B, T]
 
-        # features = self.encoder(data['data'])
-        # w = self.head.weight.squeeze(0)
-        # w = F.normalize(w, dim=0, p=2)  # Normalize the weight vector
-        # features = F.normalize(features, dim=1, p=2)  # Normalize the features
-        # proj = features @ w  # [B, 1]
-        # proj = proj.view(-1, 1)  # Reshape to [B, 1]
-        # logits = proj + self.biases.view(1, -1)  # [B, T]
-        # # logits = logits * self.scaler  # Scale the logits
-        # cdf = torch.sigmoid(logits * self.scaler)
-        # risk = proj.view(-1)  # [B * T]
-        # surv = 1. - cdf  # [B, T]
-
         features = self.encoder(data['data'])
-        proj = self.head(features)  # [B, 1]
+        w = self.head.weight.squeeze(0)
+        w = F.normalize(w, dim=0, p=2)  # Normalize the weight vector
+        features = F.normalize(features, dim=1, p=2)  # Normalize the features
+        proj = features @ w  # [B, 1]
+        proj = proj.view(-1, 1) * self.scaler  # Reshape to [B, 1]
         logits = proj + self.biases.view(1, -1)  # [B, T]
-        cdf = torch.sigmoid(logits / self.temp)  # [B, T]
+        cdf = torch.sigmoid(logits)
         risk = proj.view(-1)  # [B * T]
-        surv = 1. - cdf        
+        surv = 1. - cdf  # [B, T]
+
+        # features = self.encoder(data['data'])
+        # proj = self.head(features)  # [B, 1]
+        # logits = proj + self.biases.view(1, -1)  # [B, T]
+        # cdf = torch.sigmoid(logits * self.scaler)  # [B, T]
+        # risk = proj.view(-1)  # [B * T]
+        # surv = 1. - cdf
 
         # features_norm = F.normalize(features, dim=1, p=2)
         # weight_norm = F.normalize(self.head.weight.squeeze(0), dim=0, p=2)

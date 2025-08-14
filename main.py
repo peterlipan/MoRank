@@ -24,19 +24,32 @@ def main(args, logger):
 if __name__ == '__main__':
     warnings.filterwarnings("ignore")
     parser = argparse.ArgumentParser()
-    yaml_config = yaml_config_hook("./configs/gbmlgg.yaml")
+
+    # Optional config file argument
+    parser.add_argument(
+        '--config',
+        type=str,
+        default="eyepacs",
+        help='Path to YAML config file'
+    )
+    parser.add_argument('--debug', action="store_true", help='debug mode (disable wandb)')
+
+    # First parse to get config path
+    temp_args, _ = parser.parse_known_args()
+    temp_args.config = f"./configs/{temp_args.config}.yaml"
+    yaml_config = yaml_config_hook(temp_args.config)
+
+    # Add yaml config items as args
     for k, v in yaml_config.items():
         parser.add_argument(f"--{k}", default=v, type=type(v))
-    parser.add_argument('--debug', action="store_true", help='debug mode(disable wandb)')
+
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.visible_gpus
+
     if not args.debug:
         wandb.login(key="cb1e7d54d21d9080b46d2b1ae2a13d895770aa29")
-        config = dict()
-
-        for k, v in yaml_config.items():
-            config[k] = v
+        config = {k: getattr(args, k) for k in yaml_config.keys()}
 
         wandb_logger = wandb.init(
             project="OdRep",

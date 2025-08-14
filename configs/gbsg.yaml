@@ -14,7 +14,7 @@ n_bins: 25
 normalize: False
 
 # model
-method: 'deepcdf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+method: 'ordsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024

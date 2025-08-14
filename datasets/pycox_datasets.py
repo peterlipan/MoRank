@@ -88,6 +88,7 @@ class PytorchDataset(Dataset):
             'duration': torch.tensor(self.duration[idx], dtype=torch.float32)
         }
 
+# this raw data needs to be cleaned. Use deephit's instead.
 class MetabricDataset(PycoxDataset):
     def __init__(self, n_bins=-1, stratify=False, kfold=5, seed=42, normalize=False):
         super().__init__(metabric, n_bins=n_bins, stratify=stratify, kfold=kfold, seed=seed, normalize=normalize)

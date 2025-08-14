@@ -92,9 +92,9 @@ class TorchVisionModels(nn.Module):
 
 
 def get_encoder(args):
-    if args.backbone == 'mlp':
+    if args.backbone.lower() == 'mlp':
         return MLP(d_in=args.n_features, d_hid=args.d_hid, d_out=args.d_hid, n_layers=args.n_layers, dropout=args.dropout, activation=args.activation)
-    elif args.backbone == 'vit':
+    elif args.backbone.lower() == 'vit':
         return VisionTransformer(n_features=args.n_features, patch_size=args.patch_size, pretrained=args.pretrained)
     else:
         return TorchVisionModels(model_name=args.backbone, pretrained=args.pretrained)

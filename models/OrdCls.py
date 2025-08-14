@@ -68,7 +68,7 @@ class OrdCls(nn.Module):
         self.n_classes = args.n_classes
         self.head = nn.Linear(self.d_hid, 1, bias=False)
 
-        self.biases = nn.Parameter(torch.linspace(-1, 1, self.n_classes), requires_grad=False)
+        self.biases = nn.Parameter(torch.linspace(-1, 1, self.n_classes), requires_grad=True)
 
         self.criterion = CDFLoss()
         self.scaler = nn.Parameter(1. * torch.ones(1))  # Scale for logits
@@ -82,6 +82,7 @@ class OrdCls(nn.Module):
         features = F.normalize(features, dim=1, p=2)  # Normalize the features
         proj = features @ w  # [B, 1]
         proj = proj.view(-1, 1) 
+        # proj = self.head(features)
 
         logits = proj + self.biases.view(1, -1)  # [B, T]
         # logits = logits * self.scaler  # Scale the logits

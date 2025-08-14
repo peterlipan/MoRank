@@ -3,7 +3,7 @@ visible_gpus: '1'
 seed: 42
 
 # dataset
-dataset: 'metabric_kfold'
+dataset: 'metabric'
 task: 'survival'
 feature_file: './datasets/METABRIC/cleaned_features_final.csv'
 label_file: './datasets/METABRIC/label.csv'
@@ -13,9 +13,10 @@ results: './results'
 kfold: 5
 stratify: True
 n_bins: 18
+normalize: False
 
 # model
-method: 'deepcdf' # 'deepcdf', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax', 'vmf'
+method: 'ordsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024

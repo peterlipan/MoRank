@@ -160,8 +160,7 @@ class Trainer:
 
                         cur_lr = self.optimizer.param_groups[0]['lr']
                         metric_dict = self.validate()
-                        print(f"Fold {self.fold} | Epoch {i} | Loss: {metric_dict['Loss']} | LR: {cur_lr}")
-                        print('-'*20, 'Metrics', '-'*20)
+                        print('\n', '-'*20, 'Metrics', '-'*20)
                         for key, value in metric_dict.items():
                             print(f"{key}: {value}")
                         if self.wb_logger is not None:
@@ -206,6 +205,11 @@ class Trainer:
         duration = torch.Tensor().cuda()
         risk_prob = torch.Tensor().cuda()
         surv_prob = torch.Tensor().cuda()
+
+        # calculate the baseline_surv for deepsurv
+        if args.method.lower() == 'deepsurv':
+            bin_times = torch.arange(self.train_dataset.n_classes, dtype=torch.float32)  # or dataset.bin_times
+            self.model.prepare_for_validation(self.train_loader, bin_times.to(duration.device))
 
         # for estimating censoring distribution in the training set
         train_duration = self.train_dataset.duration
