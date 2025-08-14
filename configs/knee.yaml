@@ -3,9 +3,9 @@ visible_gpus: '1'
 seed: 42
 
 # dataset
-dataset: 'eyepacs'
+dataset: 'knee_osteoarthritis'
 task: 'classification'
-data_root: '/datastorage/li/eyepacs/augmented_resized_V2'
+data_root: '/datastorage/li/knee-osteoarthritis'
 checkpoints: './checkpoints'
 results: './results'
 

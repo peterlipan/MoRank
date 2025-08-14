@@ -22,3 +22,6 @@ def CreateDataset(args):
     elif args.dataset.lower() == 'eyepacs':
         from .eyepacs import EyepacsData
         return EyepacsData(root=args.data_root, backbone=args.backbone)
+    elif args.dataset.lower() == 'knee_osteoarthritis':
+        from .knee_osteoarthritis import KneeOsteoarthritisData
+        return KneeOsteoarthritisData(root=args.data_root, backbone=args.backbone)

@@ -48,7 +48,7 @@ class MLP(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    def __init__(self, n_features, patch_size, pretrained=""):
+    def __init__(self, n_features, patch_size, pretrained=True):
         super(VisionTransformer, self).__init__()
         config = ViTConfig.from_pretrained(pretrained) if pretrained else ViTConfig()
         config.image_size = n_features
@@ -95,6 +95,7 @@ def get_encoder(args):
     if args.backbone.lower() == 'mlp':
         return MLP(d_in=args.n_features, d_hid=args.d_hid, d_out=args.d_hid, n_layers=args.n_layers, dropout=args.dropout, activation=args.activation)
     elif args.backbone.lower() == 'vit':
-        return VisionTransformer(n_features=args.n_features, patch_size=args.patch_size, pretrained=args.pretrained)
+        pretrained = "WinKawaks/vit-tiny-patch16-224" if args.pretrained else ""
+        return VisionTransformer(n_features=args.n_features, patch_size=args.patch_size, pretrained=pretrained)
     else:
         return TorchVisionModels(model_name=args.backbone, pretrained=args.pretrained)

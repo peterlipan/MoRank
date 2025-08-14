@@ -112,14 +112,14 @@ class OrdSurv(nn.Module):
 
     def forward(self, data):
 
-        features = self.encoder(data['data'])
-        proj = self.head(features)
-        # multiply the biases by the magnitude of features and weights
-        biases = self.biases.view(1, -1) * (features.norm(dim=1, keepdim=True) * self.head.weight.norm())
-        logits = proj + biases # if self.training else proj + self.biases.view(1, -1)
-        cdf = torch.sigmoid(logits * self.scaler)
-        risk = proj.view(-1)  # [B * T]
-        surv = 1. - cdf  # [B, T]
+        # features = self.encoder(data['data'])
+        # proj = self.head(features)
+        # # multiply the biases by the magnitude of features and weights
+        # biases = self.biases.view(1, -1) * (features.norm(dim=1, keepdim=True) * self.head.weight.norm())
+        # logits = proj + biases # if self.training else proj + self.biases.view(1, -1)
+        # cdf = torch.sigmoid(logits * self.scaler)
+        # risk = proj.view(-1)  # [B * T]
+        # surv = 1. - cdf  # [B, T]
 
         # features = self.encoder(data['data'])
         # w = self.head.weight.squeeze(0)
@@ -132,12 +132,12 @@ class OrdSurv(nn.Module):
         # risk = proj.view(-1)  # [B * T]
         # surv = 1. - cdf  # [B, T]
 
-        # features = self.encoder(data['data'])
-        # proj = self.head(features)  # [B, 1]
-        # logits = proj + self.biases.view(1, -1)  # [B, T]
-        # cdf = torch.sigmoid(logits * self.scaler)  # [B, T]
-        # risk = proj.view(-1)  # [B * T]
-        # surv = 1. - cdf
+        features = self.encoder(data['data'])
+        proj = self.head(features)  # [B, 1]
+        logits = proj + self.biases.view(1, -1)  # [B, T]
+        cdf = torch.sigmoid(logits * self.scaler)  # [B, T]
+        risk = proj.view(-1)  # [B * T]
+        surv = 1. - cdf
 
         # features_norm = F.normalize(features, dim=1, p=2)
         # weight_norm = F.normalize(self.head.weight.squeeze(0), dim=0, p=2)

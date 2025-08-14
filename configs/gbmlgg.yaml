@@ -17,9 +17,8 @@ normalize: False
 
 # model
 method: 'ordsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
-backbone: 'resnet18'
+backbone: 'vit'
 patch_size: 16
-# pretrained: "WinKawaks/vit-tiny-patch16-224"
 pretrained: True
 
 
@@ -27,8 +26,8 @@ pretrained: True
 workers: 0
 optimizer: 'Adam'
 epochs: 50
-batch_size: 324
-lr: 2.0e-5
+batch_size: 256
+lr: 2.0e-4
 lr_policy: 'cosine'
 weight_decay: 0.01
 verbose: True
