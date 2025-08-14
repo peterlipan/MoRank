@@ -35,6 +35,7 @@ def aggregate_data(root, dst):
 
     path = [p.replace("./data/TCGA_GBMLGG/", "") for p in path] # keep relative path
     path = [os.path.join(root, p) for p in path]  # absolute path
+    path = np.array(path)
 
     # merge to a pickle file
     data = {
@@ -50,7 +51,7 @@ def aggregate_data(root, dst):
 
 
 class TcgaGbmLggData:
-    def __init__(self, data_root, pickle_path, backbone, n_bins=-1, stratify=False, kfold=5, seed=42):
+    def __init__(self, data_root, pickle_path, backbone, task, n_bins=-1, stratify=False, kfold=5, seed=42):
         self.data_root = data_root
         self.pickle_path = pickle_path
         self.n_bins = n_bins
@@ -104,12 +105,28 @@ class TcgaGbmLggData:
         self.path = data['path']
         self.grade = data['grade']
 
-        if n_bins > 0:
-            self.bin_durations(n_bins)
-            self.n_classes = n_bins + 2  # for edge bins
+        if task == 'classification':
+            # some g = -1. mask those samples out
+            mask = self.grade != -1
+            self.omic = self.omic[mask]
+            self.duration = self.duration[mask]
+            self.event = self.event[mask]
+            self.patient = self.patient[mask]
+            self.path = self.path[mask]
+            self.grade = self.grade[mask]
+            # label = grade in this task
+            self.label = self.grade.astype(np.int64) + 1 # dummy class for the head of CDF
+            self.n_classes = len(np.unique(self.label)) + 2  # +2 for edge bins
+
+        elif task == 'survival':
+            if n_bins > 0:
+                self.bin_durations(n_bins)
+                self.n_classes = n_bins + 2  # for edge bins
+            else:
+                self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
+                self.label = self.duration.astype(np.int64)  # convert to int64 for compatibility
         else:
-            self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
-            self.label = self.duration.astype(np.int64)  # convert to int64 for compatibility
+            raise ValueError(f"Unsupported task: {task}")
         
     def bin_durations(self, n_bins):
         # Bin duration using quantiles (equal number of samples per bin)
@@ -144,7 +161,7 @@ class TcgaGbmLggImageDataset:
     def __init__(self, tcga_data, indices, transform):
         self.duration = tcga_data.duration[indices]
         self.event = tcga_data.event[indices]
-        self.label = tcga_data.label[indices] if hasattr(tcga_data, 'label') else self.duration.astype(np.int64)
+        self.label = tcga_data.label[indices]
         self.patient = tcga_data.patient[indices]
         self.path = [tcga_data.path[i] for i in indices]
         self.n_features = tcga_data.n_features

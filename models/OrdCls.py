@@ -77,12 +77,12 @@ class OrdCls(nn.Module):
     def forward(self, data):
 
         features = self.encoder(data['data'])
-        w = self.head.weight.squeeze(0)
-        w = F.normalize(w, dim=0, p=2)  # Normalize the weight vector
-        features = F.normalize(features, dim=1, p=2)  # Normalize the features
-        proj = features @ w  # [B, 1]
-        proj = proj.view(-1, 1) 
-        # proj = self.head(features)
+        # w = self.head.weight.squeeze(0)
+        # w = F.normalize(w, dim=0, p=2)  # Normalize the weight vector
+        # features = F.normalize(features, dim=1, p=2)  # Normalize the features
+        # proj = features @ w  # [B, 1]
+        # proj = proj.view(-1, 1) 
+        proj = self.head(features)
 
         logits = proj + self.biases.view(1, -1)  # [B, T]
         # logits = logits * self.scaler  # Scale the logits

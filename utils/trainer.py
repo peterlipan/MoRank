@@ -188,8 +188,8 @@ class Trainer:
 
                 ground_truth = torch.cat((ground_truth, data['label']), dim=0)
                 predictions = torch.cat((predictions, outputs.y_pred), dim=0)
-
-            metric_dict = ordinal_metrics(ground_truth, predictions, args.alpha)
+            alpha = getattr(args, 'alpha', 0.5)
+            metric_dict = ordinal_metrics(ground_truth, predictions, alpha)
             metric_dict['Loss'] = loss / len(self.test_loader)
         self.model.train(training)
         return metric_dict
