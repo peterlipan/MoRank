@@ -112,25 +112,25 @@ class OrdSurv(nn.Module):
 
     def forward(self, data):
 
-        # features = self.encoder(data['data'])
-        # proj = self.head(features)
-        # # multiply the biases by the magnitude of features and weights
-        # biases = self.biases.view(1, -1) * (features.norm(dim=1, keepdim=True) * self.head.weight.norm())
-        # logits = proj + biases # if self.training else proj + self.biases.view(1, -1)
-        # cdf = torch.sigmoid(logits * self.scaler)
-        # risk = proj.view(-1)  # [B * T]
-        # surv = 1. - cdf  # [B, T]
-
         features = self.encoder(data['data'])
-        w = self.head.weight.squeeze(0)
-        w = F.normalize(w, dim=0, p=2)  # Normalize the weight vector
-        features = F.normalize(features, dim=1, p=2)  # Normalize the features
-        proj = features @ w  # [B, 1]
-        proj = proj.view(-1, 1) * self.scaler  # Reshape to [B, 1]
-        logits = proj + self.biases.view(1, -1)  # [B, T]
-        cdf = torch.sigmoid(logits)
+        proj = self.head(features)
+        # multiply the biases by the magnitude of features and weights
+        biases = self.biases.view(1, -1) * (features.norm(dim=1, keepdim=True) * self.head.weight.norm())
+        logits = proj + biases # if self.training else proj + self.biases.view(1, -1)
+        cdf = torch.sigmoid(logits * self.scaler)
         risk = proj.view(-1)  # [B * T]
         surv = 1. - cdf  # [B, T]
+
+        # features = self.encoder(data['data'])
+        # w = self.head.weight.squeeze(0)
+        # w = F.normalize(w, dim=0, p=2)  # Normalize the weight vector
+        # features = F.normalize(features, dim=1, p=2)  # Normalize the features
+        # proj = features @ w  # [B, 1]
+        # proj = proj.view(-1, 1)  # Reshape to [B, 1]
+        # logits = proj + self.biases.view(1, -1)  # [B, T]
+        # cdf = torch.sigmoid(logits* self.scaler)
+        # risk = proj.view(-1)  # [B * T]
+        # surv = 1. - cdf  # [B, T]
 
         # features = self.encoder(data['data'])
         # proj = self.head(features)  # [B, 1]

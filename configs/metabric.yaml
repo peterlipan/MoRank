@@ -12,7 +12,7 @@ results: './results'
 
 kfold: 5
 stratify: True
-n_bins: 18
+n_bins: 25
 normalize: False
 
 # model
