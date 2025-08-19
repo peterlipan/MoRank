@@ -13,7 +13,7 @@ kfold: 1 # disable kfold and use the official splits
 
 # model
 method: 'ordcls' # 'softmax', 'ordcls'
-backbone: 'vit'
+backbone: 'resnet18'
 patch_size: 16
 pretrained: True
 alpha: 0.5
