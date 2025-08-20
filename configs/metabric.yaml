@@ -16,13 +16,17 @@ n_bins: 25
 normalize: False
 
 # model
-method: 'ordsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete'
+method: 'deepsurv' # 'deephit', 'deepsurv', 'discrete'
 backbone: 'MLP'
 n_layers: 2
 d_hid: 1024
 dropout: 0.
 activation: 'tanh'
 
+# ours
+queue_size: 512
+lambda_rank: 0.
+ema_decay: 0.999
 
 # training
 workers: 0

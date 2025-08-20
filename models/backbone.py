@@ -10,6 +10,7 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
 
         self.activation = self.get_activation_fn(activation)
+        self.d_hid = d_hid
 
         layers = []
         for i in range(n_layers):

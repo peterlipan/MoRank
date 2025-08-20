@@ -3,10 +3,11 @@ import torch
 import warnings
 import pandas as pd
 from sksurv.util import Surv
-from models import CreateModel
+from models import CreateModel, SurvivalQueue
 from datasets import CreateDataset
 from .metrics import ordinal_metrics, compute_surv_metrics
 from torch.utils.data import DataLoader
+from .losses import RankConsistencyLoss
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
@@ -54,9 +55,13 @@ class Trainer:
         args.n_classes = self.train_dataset.n_classes
         args.n_features = self.train_dataset.n_features
 
-        self.model = CreateModel(args).cuda()
+        self.student = CreateModel(args, freeze=False).cuda()
+        self.teacher = CreateModel(args, freeze=True).cuda()
+        self.queue = SurvivalQueue(self.student.d_hid, args.queue_size).cuda()
 
-        self.optimizer = getattr(torch.optim, args.optimizer)(self.model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        self.ranking_criteria = RankConsistencyLoss(weight=args.lambda_rank)
+
+        self.optimizer = getattr(torch.optim, args.optimizer)(self.student.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
         if self.val_steps is None:
             self.val_steps = len(self.train_loader) 
@@ -134,23 +139,46 @@ class Trainer:
 
     def train(self):
         args = self.args
-        self.model.train()
+        self.student.train()
         cur_iters = 0
         for i in range(args.epochs):
             for data in self.train_loader:
                 data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
 
-                outputs = self.model(data)
-                loss = self.model.compute_loss(outputs, data)
+                stu_feat = self.student.get_features(data['xs'])
+                tch_feat = self.teacher.get_features(data['xw'])
+                tch_logits = self.teacher.get_logits(tch_feat) # for ranking consistency
+                bs = stu_feat.size(0)
+
+                # store the current batch into mem bank
+                self.queue.enqueue(tch_feat, data['duration'], data['event'], data['label'])
+                # fetch the samples in the bank
+                mem_feat, mem_duration, mem_event, mem_bins = self.queue.get()
+
+                # concat the batch and bank samples for ranking
+                feat = torch.cat([stu_feat, mem_feat], dim=0)
+                duration = torch.cat([data['duration'], mem_duration], dim=0)
+                event = torch.cat([data['event'], mem_event], dim=0)
+                label = torch.cat([data['label'], mem_bins], dim=0)
+                # feed features to head
+                stu_logits = self.student.get_logits(feat)
+
+                loss = self.student.compute_loss(stu_logits, event, duration, label)
+                loss += self.ranking_criteria(stu_logits[:bs], tch_logits[:bs]) # ranking consistency only on the batch
+
                 print(f"\rFold {self.fold} | Epoch {i} | Iter {cur_iters} | Loss: {loss.item()}", end='', flush=True)
 
                 self.optimizer.zero_grad()
                 loss.backward()
 
                 # clip gradients to avoid exploding gradients
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, norm_type=2)
+                torch.nn.utils.clip_grad_norm_(self.student.parameters(), max_norm=1.0, norm_type=2)
 
                 self.optimizer.step()
+
+                # update the teacher model
+                self.teacher.ema_update(self.student, cur_iters)
+
                 if self.scheduler is not None:
                     self.scheduler.step()
 
@@ -171,7 +199,7 @@ class Trainer:
 
     def cls_validate(self):
         args = self.args
-        training = self.model.training
+        training = self.student.training
 
         loss = 0.0
 
@@ -179,11 +207,11 @@ class Trainer:
         predictions = torch.Tensor().cuda()
 
         with torch.no_grad():
-            self.model.eval()
+            self.student.eval()
             for data in self.test_loader:
                 data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
-                outputs = self.model(data)
-                batch_loss = self.model.compute_loss(outputs, data)
+                outputs = self.student(data)
+                batch_loss = self.student.compute_loss(outputs, data)
                 loss += batch_loss.item()
 
                 ground_truth = torch.cat((ground_truth, data['label']), dim=0)
@@ -191,13 +219,13 @@ class Trainer:
             alpha = getattr(args, 'alpha', 0.5)
             metric_dict = ordinal_metrics(ground_truth, predictions, alpha)
             metric_dict['Loss'] = loss / len(self.test_loader)
-        self.model.train(training)
+        self.student.train(training)
         return metric_dict
 
     def surv_validate(self):
         args = self.args
-        training = self.model.training
-        self.model.eval()
+        training = self.student.training
+        self.student.eval()
 
         loss = 0.0
             
@@ -209,7 +237,7 @@ class Trainer:
         # calculate the baseline_surv for deepsurv
         if args.method.lower() == 'deepsurv':
             bin_times = torch.arange(self.train_dataset.n_classes, dtype=torch.float32)  # or dataset.bin_times
-            self.model.prepare_for_validation(self.train_loader, bin_times.to(duration.device))
+            self.student.model.prepare_for_validation(self.train_loader, bin_times.to(duration.device))
 
         # for estimating censoring distribution in the training set
         train_duration = self.train_dataset.duration
@@ -219,8 +247,8 @@ class Trainer:
         with torch.no_grad():
             for data in self.test_loader:
                 data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
-                outputs = self.model(data)
-                batch_loss = self.model.compute_loss(outputs, data)
+                outputs = self.student(data['x'])
+                batch_loss = self.student.compute_loss(outputs.logits, data['event'], data['duration'], data['label'])
                 loss += batch_loss.item()
                 
                 risk = outputs.risk
@@ -247,8 +275,8 @@ class Trainer:
 
             metric_dict = compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, time_points)
             metric_dict['Loss'] = loss / len(self.test_loader)
-        
-        self.model.train(training)
+
+        self.student.train(training)
 
         return metric_dict
     
@@ -267,7 +295,7 @@ class Trainer:
         args = self.args
         model_name = f"{args.method}_{args.backbone}.pt"
         save_path = os.path.join(args.checkpoints, model_name)
-        torch.save(self.model.state_dict(), save_path)
+        torch.save(self.student.state_dict(), save_path)
 
     def _save_fold_surv_avg_results(self, metric_dict, keep_best=True):
         # keep_best: whether save the best model (highest mcc) for each fold

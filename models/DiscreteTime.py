@@ -11,12 +11,14 @@ class NllSurvLoss(nn.Module):
         super().__init__()
     
     @staticmethod
-    def nll_loss(hazards, surv_prob, idx_duration, event, alpha=0.4, eps=1e-7):
-        batch_size = len(idx_duration)
-        idx_duration = idx_duration.view(batch_size, 1) # ground truth bin, 1,2,...,k
+    def nll_loss(logits, label, event, alpha=0.4, eps=1e-7):
+        batch_size = len(label)
+        idx_duration = label.view(batch_size, 1) # ground truth bin, 1,2,...,k
         event = event.view(batch_size, 1).float()
-        if surv_prob is None:
-            surv_prob = torch.cumprod(1 - hazards, dim=1) # surival is cumulative product of 1 - hazards
+
+        hazards = F.sigmoid(logits)
+        surv_prob = torch.cumprod(1 - hazards, dim=1)  # survival probability
+
         # without padding, S(0) = S[0], h(0) = h[0]
         surv_prob_padded = torch.cat([torch.ones_like(event), surv_prob], 1) #S(-1) = 0, all patients are alive from (-inf, 0) by definition
         # after padding, S(0) = S[1], S(1) = S[2], etc, h(0) = h[0]
@@ -29,12 +31,11 @@ class NllSurvLoss(nn.Module):
         loss = loss.mean()
         return loss
 
-    def forward(self, outputs, data):
+    def forward(self, logits, event, duration, label):
         return self.nll_loss(
-            outputs.hazards,
-            outputs.surv,
-            data['label'],
-            data['event'],
+            logits,
+            label,
+            event
         )
 
 
@@ -47,17 +48,19 @@ class DiscreteTime(nn.Module):
         self.n_classes = args.n_classes
         self.head = nn.Linear(self.d_hid, self.n_classes)
         self.criterion = NllSurvLoss()
-    
-    def forward(self, data):
-        features = self.encoder(data['data'])
+
+    def forward(self, x):
+        features = self.encoder(x)
         logits = self.head(features)
         hazards = F.sigmoid(logits)
         surv = torch.cumprod(1 - hazards, dim=1)
         risk = - torch.sum(surv, dim=1)  # risk is the negative cumulative survival
         return ModelOutputs(features=features, logits=logits, hazards=hazards, surv=surv, risk=risk)
 
-    def compute_loss(self, outputs, data):
+    def compute_loss(self, logits, event, duration, label):
         return self.criterion(
-            outputs,
-            data
+            logits,
+            event,
+            duration,
+            label
         )

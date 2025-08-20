@@ -21,10 +21,10 @@ class DeepHitsurvLoss(nn.Module):
         rank_mat = ((dur_i < dur_j) | ((dur_i == dur_j) & (ev_j == 0))).float() * ev_i
         return rank_mat
 
-    def forward(self, outputs, data):
+    def forward(self, logits, event, duration, label):
         # directly predict the risk factors
-        rank_mat = self.pair_rank_mat(data['label'], data['event'])
-        return self.dhl(outputs.logits, data['label'], data['event'], rank_mat)
+        rank_mat = self.pair_rank_mat(label, event)
+        return self.dhl(logits, label, event, rank_mat)
 
 
 class DeepHit(nn.Module):
@@ -37,9 +37,10 @@ class DeepHit(nn.Module):
         self.head = nn.Linear(self.d_hid, args.n_classes)
         self.n_classes = args.n_classes
         self.criterion = DeepHitsurvLoss()
-    
-    def forward(self, data):
-        features = self.encoder(data['data'])
+
+    def forward(self, x):
+        # the full forward pass
+        features = self.encoder(x)
         logits = self.head(features)
         pmf = F.softmax(logits, dim=1)  # probability mass function
         fht = torch.argmax(pmf, dim=1)  # first hitting time
@@ -50,8 +51,10 @@ class DeepHit(nn.Module):
         surv = 1. - cdf
         return ModelOutputs(features=features, logits=logits, pmf=pmf, risk=risk, cdf=cdf, surv=surv, fht=fht, prob_at_fht=prob_at_fht)
 
-    def compute_loss(self, outputs, data):
+    def compute_loss(self, logits, event, duration, label):
         return self.criterion(
-            outputs,
-            data
+            logits,
+            event,
+            duration,
+            label
         )

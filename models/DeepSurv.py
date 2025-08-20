@@ -13,8 +13,8 @@ class CoxSurvLoss(nn.Module):
         super().__init__()
         self.cph = CoxPHLoss()
         self.eps = eps
-    def forward(self, outputs, data):
-        return self.cph(outputs.risk, data['duration'], data['event'])
+    def forward(self, logits, event, duration, label):
+        return self.cph(logits, duration, event)
 
 
 class DeepSurv(nn.Module):
@@ -38,8 +38,8 @@ class DeepSurv(nn.Module):
         self.baseline_surv_bins_ = None           # baseline survival projected onto bin times
         self._baseline_ready_for_bins = False
 
-    def forward(self, data):
-        features = self.encoder(data['data'])
+    def forward(self, x):
+        features = self.encoder(x)
         logits = self.head(features)
         risk = logits.view(-1)  # linear predictor (log hazard ratio)
 
@@ -54,8 +54,8 @@ class DeepSurv(nn.Module):
 
         return ModelOutputs(features=features, logits=logits, risk=risk, surv=surv)
 
-    def compute_loss(self, outputs, data):
-        return self.criterion(outputs, data)
+    def compute_loss(self, logits, event, duration, label):
+        return self.criterion(logits, event, duration, label)
 
     @torch.no_grad()
     def configure_time_bins(self, bin_times):
@@ -84,8 +84,8 @@ class DeepSurv(nn.Module):
 
         durations_list, events_list, lp_list = [], [], []
         for batch in train_loader:
-            x = batch['data'].to(device)
-            out = self.forward({'data': x})
+            x = batch['xs'].to(device)
+            out = self.forward(x)
             lp_list.append(out.risk.detach().cpu())
             durations_list.append(batch['duration'].detach().cpu())
             events_list.append(batch['event'].detach().cpu())
@@ -190,8 +190,8 @@ class DeepSurv(nn.Module):
         self.eval()
         surv_rows = []
         for batch in data_loader:
-            x = batch['data'].to(device)
-            out = self.forward({'data': x})  # forward supplies surv if baseline ready
+            x = batch['x'].to(device)
+            out = self.forward(x)  # forward supplies surv if baseline ready
             if out.surv is None:
                 raise RuntimeError("Forward did not produce surv. Baseline not ready?")
             surv_rows.append(out.surv.cpu())

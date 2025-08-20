@@ -148,17 +148,17 @@ class TcgaGbmLggData:
             for train_idx, test_idx in kf.split(pid, patient_event):
                 train_idx = np.where(np.isin(self.patient, pid[train_idx]))[0]
                 test_idx = np.where(np.isin(self.patient, pid[test_idx]))[0]
-                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform), TcgaGbmLggImageDataset(self, test_idx, self.test_transform)
+                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform, training=True), TcgaGbmLggImageDataset(self, test_idx, self.test_transform, training=False)
         else:
             kf = KFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
             for train_idx, test_idx in kf.split(pid):
                 train_idx = np.where(np.isin(self.patient, pid[train_idx]))[0]
                 test_idx = np.where(np.isin(self.patient, pid[test_idx]))[0]
-                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform), TcgaGbmLggImageDataset(self, test_idx, self.test_transform)
+                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform, training=True), TcgaGbmLggImageDataset(self, test_idx, self.test_transform, training=False)
 
 
 class TcgaGbmLggImageDataset:
-    def __init__(self, tcga_data, indices, transform):
+    def __init__(self, tcga_data, indices, transform, training=False):
         self.duration = tcga_data.duration[indices]
         self.event = tcga_data.event[indices]
         self.label = tcga_data.label[indices]
@@ -169,6 +169,7 @@ class TcgaGbmLggImageDataset:
         self.n_events = np.unique(self.event).size
         self.transform = transform
         self._duration_to_label = tcga_data._duration_to_label
+        self.training = training
 
     def __len__(self):
         return len(self.path)
@@ -178,15 +179,24 @@ class TcgaGbmLggImageDataset:
         image = Image.open(image_path).convert('RGB')
         image = np.array(image)
 
-        if self.transform:
-            image = self.transform(image=image)['image']
-
-        return {
-            'data': image,
-            'duration': self.duration[idx],
-            'event': self.event[idx],
-            'label': self.label[idx],
-        }
+        if self.training:
+            xs = self.transform(image=image)['image']
+            xw = self.transform(image=image)['image']
+            return {
+                'xs': xs,
+                'xw': xw,
+                'duration': self.duration[idx],
+                'event': self.event[idx],
+                'label': self.label[idx],
+            }
+        else:
+            x = self.transform(image=image)['image']
+            return {
+                'x': x,
+                'duration': self.duration[idx],
+                'event': self.event[idx],
+                'label': self.label[idx],
+            }
 
 
 

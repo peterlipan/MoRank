@@ -1,1 +1,1 @@
-from .utils import CreateModel
+from .utils import CreateModel, SurvivalQueue

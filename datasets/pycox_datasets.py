@@ -5,6 +5,7 @@ import pandas as pd
 from sklearn.model_selection import KFold, StratifiedKFold
 from torch.utils.data import Dataset
 from pycox.datasets import metabric, support, gbsg, flchain, nwtco, sac3, rr_nl_nhp, sac_admin5
+from .augmentations import weak_aug, strong_aug
 
 
 class PycoxDataset:
@@ -58,15 +59,15 @@ class PycoxDataset:
         if self.stratify:
             kf = StratifiedKFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
             for train_idx, test_idx in kf.split(self.data, self.event):
-                yield PytorchDataset(self, train_idx), PytorchDataset(self, test_idx)
+                yield PytorchDataset(self, train_idx, aug=True), PytorchDataset(self, test_idx, aug=False)
         else:
             kf = KFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
             for train_idx, test_idx in kf.split(self.data):
-                yield PytorchDataset(self, train_idx), PytorchDataset(self, test_idx)
+                yield PytorchDataset(self, train_idx, aug=True), PytorchDataset(self, test_idx, aug=False)
 
 
 class PytorchDataset(Dataset):
-    def __init__(self, pycox_data, indices):
+    def __init__(self, pycox_data, indices, aug=False):
         self.duration = pycox_data.duration[indices]
         self.event = pycox_data.event[indices]
         self.data = pycox_data.data[indices]
@@ -75,14 +76,25 @@ class PytorchDataset(Dataset):
         self.n_classes = pycox_data.n_classes
         self.n_events = pycox_data.n_events
         self._duration_to_label = pycox_data._duration_to_label
+        self.aug = aug
 
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
+        if self.aug:
+            xs = strong_aug(self.data[idx])
+            xw = weak_aug(self.data[idx])
+            return {
+                'xs': torch.tensor(xs, dtype=torch.float32),
+                'xw': torch.tensor(xw, dtype=torch.float32),
+                'label': torch.tensor(self.label[idx], dtype=torch.long),
+                'event': torch.tensor(self.event[idx], dtype=torch.long),
+                'duration': torch.tensor(self.duration[idx], dtype=torch.float32)
+            }
         return {
-            'data': torch.tensor(self.data[idx], dtype=torch.float32),
+            'x': torch.tensor(self.data[idx], dtype=torch.float32),
             'label': torch.tensor(self.label[idx], dtype=torch.long),
             'event': torch.tensor(self.event[idx], dtype=torch.long),
             'duration': torch.tensor(self.duration[idx], dtype=torch.float32)

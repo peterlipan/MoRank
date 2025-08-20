@@ -1,7 +1,9 @@
+import torch
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 from sklearn.model_selection import KFold, StratifiedKFold
+from .augmentations import weak_aug, strong_aug
 
 
 class METABRICData:
@@ -17,7 +19,7 @@ class METABRICData:
 
         if n_bins > 0:
             self.bin_durations(n_bins)
-            self.n_classes = n_bins + 10  # for edge bins
+            self.n_classes = n_bins + 2  # for edge bins
         else:
             self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
             self.label = self.duration
@@ -42,11 +44,11 @@ class METABRICData:
     def bin_durations(self, n_bins):
         # Bin duration using quantiles (equal number of samples per bin)
         self.bin_edges = np.quantile(self.duration, q=np.linspace(0, 1, n_bins + 1))
-        self.label = np.digitize(self.duration, self.bin_edges[1:-1]).astype(np.int64) + 5
+        self.label = np.digitize(self.duration, self.bin_edges[1:-1]).astype(np.int64) + 1
 
     def _duration_to_label(self, duration):
         if self.n_bins > 0:
-            return np.digitize(duration, self.bin_edges[1:-1]).astype(np.int64) + 5
+            return np.digitize(duration, self.bin_edges[1:-1]).astype(np.int64) + 1
         else:
             return duration.astype(np.int64)
 
@@ -54,15 +56,15 @@ class METABRICData:
         if self.stratify:
             kf = StratifiedKFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
             for train_idx, test_idx in kf.split(self.data, self.event):
-                yield METABRICDataset(self, train_idx), METABRICDataset(self, test_idx)
+                yield METABRICDataset(self, train_idx, aug=True), METABRICDataset(self, test_idx, aug=False)
         else:
             kf = KFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
             for train_idx, test_idx in kf.split(self.data):
-                yield METABRICDataset(self, train_idx), METABRICDataset(self, test_idx)
+                yield METABRICDataset(self, train_idx, aug=True), METABRICDataset(self, test_idx, aug=False)
 
 
 class METABRICDataset(Dataset):
-    def __init__(self, metabric_data, indices):
+    def __init__(self, metabric_data, indices, aug=False):
         self.data = metabric_data.data[indices].astype(np.float32)
         self.duration = metabric_data.duration[indices].astype(np.int64)
         self.event = metabric_data.event[indices].astype(np.int64)
@@ -71,15 +73,26 @@ class METABRICDataset(Dataset):
         self.n_classes = metabric_data.n_classes
         self.n_events = metabric_data.n_events
         self._duration_to_label = metabric_data._duration_to_label
+        self.aug = aug
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
+        if self.aug:
+            xs = strong_aug(self.data[idx])
+            xw = weak_aug(self.data[idx])
+            return {
+                'xs': torch.tensor(xs, dtype=torch.float32),
+                'xw': torch.tensor(xw, dtype=torch.float32),
+                'label': torch.tensor(self.label[idx], dtype=torch.long),
+                'event': torch.tensor(self.event[idx], dtype=torch.long),
+                'duration': torch.tensor(self.duration[idx], dtype=torch.float32)
+            }
         return {
-            'data': self.data[idx],
-            'label': self.label[idx],
-            'duration': self.duration[idx],
-            'event': self.event[idx],
+            'x': torch.tensor(self.data[idx], dtype=torch.float32),
+            'label': torch.tensor(self.label[idx], dtype=torch.long),
+            'event': torch.tensor(self.event[idx], dtype=torch.long),
+            'duration': torch.tensor(self.duration[idx], dtype=torch.float32)
         }
 
