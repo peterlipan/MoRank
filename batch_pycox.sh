@@ -1,8 +1,8 @@
 #!/bin/bash
 
 configs=("metabric" "support" "gbsg" "flchain" "nwtco")
-methods=("ordsurv" "deepsurv" "deephit" "discrete")
-seeds=(0 42 2025 114514 777)
+methods=("deepsurv" "deephit" "discrete")
+seeds=(42)
 
 for config in "${configs[@]}"; do
   for method in "${methods[@]}"; do

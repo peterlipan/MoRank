@@ -1,0 +1,88 @@
+_wandb:
+    value:
+        cli_version: 0.20.1
+        m: []
+        python_version: 3.8.20
+        t:
+            "1":
+                - 1
+                - 5
+                - 51
+                - 53
+            "2":
+                - 1
+                - 5
+                - 11
+                - 41
+                - 49
+                - 51
+                - 53
+            "3":
+                - 16
+                - 55
+            "4": 3.8.20
+            "5": 0.20.1
+            "12": 0.20.1
+            "13": linux-x86_64
+activation:
+    value: tanh
+backbone:
+    value: MLP
+batch_size:
+    value: 256
+checkpoints:
+    value: ./checkpoints
+d_hid:
+    value: 1024
+dataset:
+    value: metabric
+dropout:
+    value: 0
+ema_decay:
+    value: 0.999
+epochs:
+    value: 100
+feature_file:
+    value: ./datasets/METABRIC/cleaned_features_final.csv
+kfold:
+    value: 5
+label_file:
+    value: ./datasets/METABRIC/label.csv
+lambda_rank:
+    value: 0
+lr:
+    value: 0.0002
+lr_policy:
+    value: cosine
+method:
+    value: deepsurv
+n_bins:
+    value: 25
+n_layers:
+    value: 2
+normalize:
+    value: false
+optimizer:
+    value: Adam
+queue:
+    value: false
+queue_size:
+    value: 1024
+results:
+    value: ./results
+seed:
+    value: 42
+stratify:
+    value: true
+task:
+    value: survival
+verbose:
+    value: true
+virt_ratio:
+    value: 0.5
+visible_gpus:
+    value: "1"
+weight_decay:
+    value: 0.01
+workers:
+    value: 0

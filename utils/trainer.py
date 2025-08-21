@@ -57,7 +57,7 @@ class Trainer:
 
         self.student = CreateModel(args, freeze=False).cuda()
         self.teacher = CreateModel(args, freeze=True).cuda()
-        self.queue = SurvivalQueue(self.student.d_hid, args.queue_size).cuda()
+        self.queue = SurvivalQueue(self.student.d_hid, args.queue_size, self.train_dataset._duration_to_label, args.virt_ratio, args.alpha).cuda()
 
         self.ranking_criteria = RankConsistencyLoss(weight=args.lambda_rank)
 
@@ -100,6 +100,9 @@ class Trainer:
         dataset = CreateDataset(args)
 
         for fold, (train_dataset, test_dataset) in enumerate(dataset.get_kfold_datasets()):
+            # quick test on one fold
+            if hasattr(args, "fold") and fold != args.fold:
+                continue
             self.train_dataset = train_dataset
             self.test_dataset = test_dataset
             self.fold = fold
@@ -147,26 +150,32 @@ class Trainer:
 
                 stu_feat = self.student.get_features(data['xs'])
                 tch_feat = self.teacher.get_features(data['xw'])
-                tch_logits = self.teacher.get_logits(tch_feat) # for ranking consistency
+                tch_est = self.teacher.get_risk_logits(tch_feat) # for ranking consistency
                 bs = stu_feat.size(0)
 
                 # store the current batch into mem bank
-                self.queue.enqueue(tch_feat, data['duration'], data['event'], data['label'])
+                self.queue.enqueue(tch_est.risk, tch_feat, data['event'], data['duration'], data['label'])
+                q_size = self.queue.size.item()
                 # fetch the samples in the bank
-                mem_feat, mem_duration, mem_event, mem_bins = self.queue.get()
+                mem_feat, mem_event, mem_dur, mem_bins = self.queue.get()
 
-                # concat the batch and bank samples for ranking
-                feat = torch.cat([stu_feat, mem_feat], dim=0)
-                duration = torch.cat([data['duration'], mem_duration], dim=0)
-                event = torch.cat([data['event'], mem_event], dim=0)
-                label = torch.cat([data['label'], mem_bins], dim=0)
-                # feed features to head
-                stu_logits = self.student.get_logits(feat)
+                if args.queue:
+                    # concat the batch and bank samples for ranking
+                    feat = torch.cat([stu_feat, mem_feat], dim=0)
+                    event = torch.cat([data['event'], mem_event], dim=0)
+                    duration = torch.cat([data['duration'], mem_dur], dim=0)
+                    label = torch.cat([data['label'], mem_bins], dim=0)
+                else:
+                    feat = stu_feat
+                    event = data['event']
+                    duration = data['duration']
+                    label = data['label']
+                stu_est = self.student.get_risk_logits(feat)
 
-                loss = self.student.compute_loss(stu_logits, event, duration, label)
-                loss += self.ranking_criteria(stu_logits[:bs], tch_logits[:bs]) # ranking consistency only on the batch
+                loss = self.student.compute_loss(stu_est.logits, event, duration, label)
+                loss += self.ranking_criteria(stu_est.logits[:bs], tch_est.logits[:bs]) # ranking consistency only on the batch
 
-                print(f"\rFold {self.fold} | Epoch {i} | Iter {cur_iters} | Loss: {loss.item()}", end='', flush=True)
+                print(f"\rFold {self.fold} | Epoch {i} | Iter {cur_iters} | Loss: {loss.item()} | Q Size {q_size}", end='', flush=True)
 
                 self.optimizer.zero_grad()
                 loss.backward()

@@ -19,7 +19,7 @@ class METABRICData:
 
         if n_bins > 0:
             self.bin_durations(n_bins)
-            self.n_classes = n_bins + 2  # for edge bins
+            self.n_classes = n_bins  # for edge bins
         else:
             self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
             self.label = self.duration
@@ -44,11 +44,11 @@ class METABRICData:
     def bin_durations(self, n_bins):
         # Bin duration using quantiles (equal number of samples per bin)
         self.bin_edges = np.quantile(self.duration, q=np.linspace(0, 1, n_bins + 1))
-        self.label = np.digitize(self.duration, self.bin_edges[1:-1]).astype(np.int64) + 1
+        self.label = np.digitize(self.duration, self.bin_edges[1:-1]).astype(np.int64)
 
     def _duration_to_label(self, duration):
         if self.n_bins > 0:
-            return np.digitize(duration, self.bin_edges[1:-1]).astype(np.int64) + 1
+            return np.digitize(duration, self.bin_edges[1:-1]).astype(np.int64)
         else:
             return duration.astype(np.int64)
 

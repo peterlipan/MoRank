@@ -7,8 +7,24 @@ from pycox.models.loss import DeepHitSingleLoss
 
 
 class NllSurvLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, sigma=0.5, lambda_rank=0.1):
         super().__init__()
+        self.sigma = sigma
+        self.lambda_rank = lambda_rank
+
+    @staticmethod
+    def pair_rank_mat(idx_durations: torch.Tensor, events: torch.Tensor) -> torch.Tensor:
+        dur_i = idx_durations.view(-1, 1)
+        dur_j = idx_durations.view(1, -1)
+        ev_i = events.view(-1, 1)
+        ev_j = events.view(1, -1)
+        return ((dur_i < dur_j) | ((dur_i == dur_j) & (ev_j == 0))).float() * ev_i
+
+    def rank_loss_on_risk(self, risk: torch.Tensor, durations: torch.Tensor, events: torch.Tensor) -> torch.Tensor:
+        diff_risk = risk.view(-1, 1) - risk.view(1, -1)
+        rank_mat = self.pair_rank_mat(durations, events)
+        loss = rank_mat * torch.exp(-diff_risk / self.sigma)
+        return loss.sum() / (rank_mat.sum() + 1e-6)
     
     @staticmethod
     def nll_loss(logits, label, event, alpha=0.4, eps=1e-7):
@@ -32,11 +48,12 @@ class NllSurvLoss(nn.Module):
         return loss
 
     def forward(self, logits, event, duration, label):
-        return self.nll_loss(
-            logits,
-            label,
-            event
-        )
+        hazards = F.sigmoid(logits)
+        surv = torch.cumprod(1 - hazards, dim=1)
+        risk = - torch.sum(surv, dim=1)
+        rank_loss = self.rank_loss_on_risk(risk, duration, event)
+        surv_loss = self.nll_loss(logits, label, event)
+        return self.lambda_rank * rank_loss + surv_loss
 
 
 class DiscreteTime(nn.Module):
@@ -56,6 +73,13 @@ class DiscreteTime(nn.Module):
         surv = torch.cumprod(1 - hazards, dim=1)
         risk = - torch.sum(surv, dim=1)  # risk is the negative cumulative survival
         return ModelOutputs(features=features, logits=logits, hazards=hazards, surv=surv, risk=risk)
+    
+    def get_risk_logits(self, features):
+        logits = self.head(features)
+        hazards = F.sigmoid(logits)
+        surv = torch.cumprod(1 - hazards, dim=1)
+        risk = - torch.sum(surv, dim=1)
+        return ModelOutputs(logits=logits, risk=risk)
 
     def compute_loss(self, logits, event, duration, label):
         return self.criterion(

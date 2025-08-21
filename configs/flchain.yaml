@@ -25,6 +25,9 @@ activation: 'tanh'
 queue_size: 512
 lambda_rank: 0.
 ema_decay: 0.999
+queue: False
+virt_ratio: 1.0
+alpha: 0.4
 
 # training
 workers: 0

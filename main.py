@@ -17,7 +17,7 @@ def main(args, logger):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    trainer = Trainer(args)
+    trainer = Trainer(args, logger)
     trainer.run()
 
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
         config = {k: getattr(args, k) for k in yaml_config.keys()}
 
         wandb_logger = wandb.init(
-            project="OdRep",
+            project="MoRank",
             config=config
         )
     else:

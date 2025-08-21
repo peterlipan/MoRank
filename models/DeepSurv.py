@@ -53,6 +53,11 @@ class DeepSurv(nn.Module):
             surv = surv_baseline ** hr   # S(t|x) = S0(t)^{exp(lp_centered)}
 
         return ModelOutputs(features=features, logits=logits, risk=risk, surv=surv)
+    
+    def get_risk_logits(self, features):
+        logits = self.head(features)
+        risk = logits.view(-1)  # linear predictor (log hazard ratio)
+        return ModelOutputs(logits=logits, risk=risk)
 
     def compute_loss(self, logits, event, duration, label):
         return self.criterion(logits, event, duration, label)

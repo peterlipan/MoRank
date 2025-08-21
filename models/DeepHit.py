@@ -23,7 +23,7 @@ class DeepHitsurvLoss(nn.Module):
 
     def forward(self, logits, event, duration, label):
         # directly predict the risk factors
-        rank_mat = self.pair_rank_mat(label, event)
+        rank_mat = self.pair_rank_mat(duration, event)
         return self.dhl(logits, label, event, rank_mat)
 
 
@@ -50,6 +50,13 @@ class DeepHit(nn.Module):
         cdf = cdf.clamp(min=0, max=1)  # ensure
         surv = 1. - cdf
         return ModelOutputs(features=features, logits=logits, pmf=pmf, risk=risk, cdf=cdf, surv=surv, fht=fht, prob_at_fht=prob_at_fht)
+    
+    def get_risk_logits(self, features):
+        logits = self.head(features)
+        pmf = F.softmax(logits, dim=1)  # probability mass function
+        fht = torch.argmax(pmf, dim=1)  # first hitting time
+        risk = -fht
+        return ModelOutputs(logits=logits, risk=risk)
 
     def compute_loss(self, logits, event, duration, label):
         return self.criterion(

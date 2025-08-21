@@ -13,24 +13,27 @@ results: './results'
 kfold: 5
 stratify: True
 n_bins: 25
-normalize: False
 
 # model
 method: 'deepsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
 backbone: 'resnet18'
 patch_size: 16
 pretrained: True
+fold: 0
 
 # ours
-queue_size: 4096
+queue_size: 512
 lambda_rank: 0.
 ema_decay: 0.999
+queue: False
+virt_ratio: 1.0
+alpha: 0.4
 
 # training
 workers: 0
 optimizer: 'Adam'
-epochs: 50
-batch_size: 512
+epochs: 20
+batch_size: 128
 lr: 2.0e-4
 lr_policy: 'cosine'
 weight_decay: 0.01
