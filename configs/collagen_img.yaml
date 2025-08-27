@@ -15,24 +15,23 @@ stratify: True
 n_bins: 25
 
 # model
-method: 'deepsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+method: 'deepsurv' # ''deephit', 'deepsurv', 'discrete'
 backbone: 'resnet18'
 patch_size: 16
 pretrained: True
-fold: 0
-aggregator: ""
+aggregator: "None"
 patient_level: False
 
 # ours
 queue_size: 1024
-lambda_rank: 0.1
+lambda_rank: 0.
 ema_decay: 0.999
-queue: True
+queue: False
 virt_ratio: 0.
 alpha: 0.4
 
 # patient-level evaluation
-aggregate: "mean"
+metric_agg: "None" # 'None' | 'mean' | 'max' | 'min'
 
 # training
 workers: 0

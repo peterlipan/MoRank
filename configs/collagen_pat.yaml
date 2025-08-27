@@ -24,15 +24,15 @@ aggregator: "mean"
 patient_level: True
 
 # ours
-queue_size: 1024
+queue_size: 72
 lambda_rank: 0.
 ema_decay: 0.999
 queue: False
 virt_ratio: 0.
 alpha: 0.4
 
-# patient-level evaluation
-# aggregate: "mean"
+# patient-level evaluation. meaningless for patient-level models
+metric_agg: "mean"
 
 # training
 workers: 0

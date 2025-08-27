@@ -90,9 +90,6 @@ class Trainer:
         if self.verbose:
             print('-'*20, 'Metrics', '-'*20)
         print(metric_dict)
-        if args.method == 'deepcdf' and args.n_bins > 0:
-            self._fold_plot_2d(metric_dict, self.test_loader, training_set=False)
-            self._fold_plot_2d(metric_dict, self.train_loader, training_set=True)
         # self.fold_univariate_cox_regression_analysis(args, self.fold)
         self._save_fold_avg_results(metric_dict)
 
@@ -118,11 +115,6 @@ class Trainer:
             if self.verbose:
                 print('-'*20, f'Fold {fold} Metrics', '-'*20)
             print(metric_dict)
-            if args.method == 'deepcdf' and args.n_bins > 0:
-                self._fold_plot_2d(metric_dict, self.test_loader, training_set=False)
-                self._fold_plot_2d(metric_dict, self.train_loader, training_set=True)
-                self.plot_risk_cdf_curves(self.train_loader, training_set=True)
-                self.plot_risk_cdf_curves(self.test_loader, training_set=False)
 
             # self.fold_univariate_cox_regression_analysis(args, fold)
 
@@ -211,32 +203,7 @@ class Trainer:
                                 'Test': metric_dict
                             }})
 
-    def cls_validate(self):
-        args = self.args
-        training = self.student.training
-
-        loss = 0.0
-
-        ground_truth = torch.Tensor().cuda()
-        predictions = torch.Tensor().cuda()
-
-        with torch.no_grad():
-            self.student.eval()
-            for data in self.test_loader:
-                data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
-                outputs = self.student(data)
-                batch_loss = self.student.compute_loss(outputs, data)
-                loss += batch_loss.item()
-
-                ground_truth = torch.cat((ground_truth, data['label']), dim=0)
-                predictions = torch.cat((predictions, outputs.y_pred), dim=0)
-            alpha = getattr(args, 'alpha', 0.5)
-            metric_dict = ordinal_metrics(ground_truth, predictions, alpha)
-            metric_dict['Loss'] = loss / len(self.test_loader)
-        self.student.train(training)
-        return metric_dict
-
-    def surv_validate(self):  # patient-level evaluation
+    def validate(self):  # patient-level evaluation
         args = self.args
         training = self.student.training
         self.student.eval()
@@ -284,8 +251,8 @@ class Trainer:
         surv_prob = np.concatenate(surv_prob)
         patient_idx = np.array(patient_idx)
 
-        if hasattr(args, "aggregate"):
-            agg = args.aggregate.lower()
+        if args.metric_agg != 'None':
+            agg = args.metric_agg.lower()
 
             patient_risk, patient_surv, patient_event, patient_time = [], [], [], []
             for pid in np.unique(patient_idx):
@@ -304,8 +271,6 @@ class Trainer:
                     i = np.argmin(risks)
                     patient_risk.append(risks[i])
                     patient_surv.append(survs[i])
-                else:
-                    raise ValueError(f"Unknown aggregation method: {agg}")
 
                 # assume event/time consistent per patient
                 patient_event.append(event_indicator[mask][0])
@@ -330,31 +295,21 @@ class Trainer:
         self.student.train(training)
         return metric_dict
 
-    def validate(self):
-        args = self.args
-        if args.task.lower() == 'classification':
-            metric_dict = self.cls_validate()
-        elif args.task.lower() == 'survival':
-            metric_dict = self.surv_validate()
-        else:
-            raise ValueError(f"Unknown task: {args.task}. Supported tasks are: classification, survival.")
-
-        return metric_dict
-
     def save_model(self):
         args = self.args
         model_name = f"{args.method}_{args.backbone}.pt"
         save_path = os.path.join(args.checkpoints, model_name)
         torch.save(self.student.state_dict(), save_path)
 
-    def _save_fold_surv_avg_results(self, metric_dict, keep_best=True):
+    def _save_fold_avg_results(self, metric_dict, keep_best=True):
         # keep_best: whether save the best model (highest mcc) for each fold
         args = self.args
-        df_name = f"{args.kfold}Fold_{args.dataset}.xlsx"
+        suffix = '_image-level' if args.aggregator == 'None' and args.metric_agg == 'None' else '_patient-level'
+        df_name = f"{args.kfold}Fold_{args.dataset}{suffix}.xlsx"
         res_path = args.results
 
-        settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed', 'Bins']
-        kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed', 'n_bins']
+        settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed', 'Bins', 'Evaluation Aggregation', 'Model Aggregator']
+        kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed', 'n_bins', 'metric_agg', 'aggregator']
 
         set2kwargs = {k: v for k, v in zip(settings, kwargs )}
 
@@ -385,55 +340,6 @@ class Trainer:
         new_row.update(metric_dict)
         df = df._append(new_row, ignore_index=True)
         df.to_excel(df_path, index=False)
-        
-    def _save_fold_cls_avg_results(self, metric_dict, keep_best=True):
-        # keep_best: whether save the best model (highest mcc) for each fold
-        args = self.args
-        df_name = f"{args.kfold}Fold_{args.dataset}_Classification.xlsx"
-        res_path = args.results
-
-        settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed']
-        kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed']
-
-        set2kwargs = {k: v for k, v in zip(settings, kwargs )}
-
-        metric_names = self.m_logger.metrics()
-        df_columns = settings + metric_names
-        
-        df_path = os.path.join(res_path, df_name)
-        if not os.path.exists(df_path):
-            df = pd.DataFrame(columns=df_columns)
-        else:
-            df = pd.read_excel(df_path)
-            if df_columns != df.columns.tolist():
-                warnings.warn("Columns in the existing excel file do not match the current settings.")
-                df = pd.DataFrame(columns=df_columns)
-        
-        new_row = {k: args.__dict__[v] for k, v in set2kwargs.items()}
-
-        if keep_best:
-            reference = 'Acc'
-            existing_rows = df[(df[settings] == pd.Series(new_row)).all(axis=1)]
-            if not existing_rows.empty:
-                existing_acc = existing_rows[reference].values
-                if metric_dict[reference] > existing_acc:
-                    df = df.drop(existing_rows.index)
-                else:
-                    return
-
-        new_row.update(metric_dict)
-        df = df._append(new_row, ignore_index=True)
-        df.to_excel(df_path, index=False)
-
-    def _save_fold_avg_results(self, metric_dict):
-        # save the average results for each fold
-        args = self.args
-        if args.task.lower() == 'classification':
-            self._save_fold_cls_avg_results(metric_dict)
-        elif args.task.lower() == 'survival':
-            self._save_fold_surv_avg_results(metric_dict)
-        else:
-            raise ValueError(f"Unknown task: {args.task}. Supported tasks are: classification, survival.")
 
     def fold_univariate_cox_regression_analysis(self):
         args = self.args
@@ -495,129 +401,4 @@ class Trainer:
                 existing_df = self.cox_df
             existing_df.to_excel(df_path, index=False)
 
-        self.model.train(training)       
-    
-    def _fold_plot_2d(self, metric_dict, dataloader, training_set, uncensored=True):
-        args = self.args
-        fold = self.fold
-        training = self.model.training
-        suffix = '_training' if training_set else ''
-        self.model.eval()
-        save_path = os.path.join(args.results, args.dataset, f"Fold_{fold}_{args.method}{suffix}.png")
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        # Storage
-        coord_x = torch.Tensor().cuda()
-        coord_y = torch.Tensor().cuda()
-        event = torch.Tensor().cuda()
-        duration = torch.Tensor().cuda()
-
-        # Collect data
-        with torch.no_grad():
-            for data in dataloader:
-                data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
-                outputs = self.model.project_2d(data)
-                coord_x = torch.cat((coord_x, outputs.x), dim=0)
-                coord_y = torch.cat((coord_y, outputs.y), dim=0)
-                event = torch.cat((event, data['event']), dim=0)
-                duration = torch.cat((duration, data['duration']), dim=0)
-
-        # Convert to NumPy
-        coord_x = coord_x.cpu().numpy()
-        coord_y = coord_y.cpu().numpy()
-        event = event.cpu().numpy()
-        duration = duration.cpu().numpy()
-        biases = self.model.biases.cpu().detach().numpy()
-        # print(f"Fold {fold} — Biases: {biases}")
-
-        # Normalize duration for red colormap
-        norm = Normalize(vmin=duration[event == 1].min(), vmax=duration[event == 1].max())
-        cmap = cm.Reds
-
-        # Prepare figure
-        plt.figure(figsize=(8, 6))
-
-        # Plot censored (event=0) in blue
-        if not uncensored:
-            plt.scatter(coord_x[event == 0], coord_y[event == 0], color='blue', alpha=0.5, label='Censored')
-
-        # Plot events (event=1) in red with colormap based on duration
-        colors = cmap(norm(duration[event == 1]))
-        plt.scatter(coord_x[event == 1], coord_y[event == 1], color=colors, alpha=0.7, label='Event')
-
-        # Add colorbar for duration
-        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar = plt.colorbar(sm)
-        cbar.set_label('Survival Time')
-
-        # Plot vertical threshold lines (CDF biases)
-        for b in biases:
-            plt.axvline(x=-b, color='black', linestyle='--', alpha=0.5)
-
-        # Plot formatting
-        plt.xlabel("Projection (along head weight)")
-        plt.ylabel("Perpendicular Component")
-        plt.title(f"Fold {fold} — C-Index: {metric_dict['C-index']:.4f}")
-        plt.legend(loc='upper right')
-        plt.grid(False)
-
-        # Save and cleanup
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-
-        # Restore training state
-        self.model.train(training)
-
-    def plot_risk_cdf_curves(self, dataloader, training_set=False):
-        args = self.args
-        fold = self.fold
-        self.model.eval()
-        training = self.model.training
-        suffix = '_training' if training_set else ''
-        save_path = os.path.join(args.results, args.dataset, f"Fold_{fold}_CDFRiskCurves{suffix}.png")
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        cdfs, labels = [], []
-        with torch.no_grad():
-            for data in dataloader:
-                data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
-                outputs = self.model(data)  # Should return logits internally passed through sigmoid → CDF
-                cdfs.append(outputs.cdf.cpu())
-                labels.append(data['label'].cpu())
-
-        # Stack everything
-        cdfs = torch.cat(cdfs, dim=0).numpy()
-        labels = torch.cat(labels, dim=0).numpy()
-
-        # Sort by risk
-        lowest_time_idx = np.min(labels)
-        highest_time_idx = np.max(labels)
-        median_time_idx = np.median(labels).astype(int)
-
-        lowest_avg_cdf = np.mean(cdfs[labels == lowest_time_idx], axis=0)
-        highest_avg_cdf = np.mean(cdfs[labels == highest_time_idx], axis=0)
-        median_avg_cdf = np.mean(cdfs[labels == median_time_idx], axis=0)
-
-        # Time bins
-        time_bins = np.arange(cdfs.shape[1])
-
-        # Plot
-        plt.figure(figsize=(8, 6))
-
-        for cdf, color, time_idx in zip([lowest_avg_cdf, median_avg_cdf, highest_avg_cdf],
-                                    ['red', 'orange', 'green'],
-                                    [lowest_time_idx, median_time_idx, highest_time_idx]):
-            plt.plot(time_bins, cdf, label=f"Label = {time_idx}", color=color)
-            # plt.axvline(labels[idx], color=color, linestyle='--', alpha=0.7)
-
-        plt.xlabel("Time Bin Index")
-        plt.ylabel("Predicted CDF")
-        plt.title(f"Fold {fold} — CDF Curves by Risk Stratification")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
         self.model.train(training)
