@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .backbone import get_encoder
 
 
 class ModelOutputs:
@@ -30,57 +31,213 @@ class ModelOutputs:
         return key in self.dict
 
 
-def get_model(args):
-    if args.method.lower() == 'deephit':
-        from .DeepHit import DeepHit
-        return DeepHit(args)
-    elif args.method.lower() == 'deepsurv':
-        from .DeepSurv import DeepSurv
-        return DeepSurv(args)
-    elif args.method.lower() == 'discrete':
-        from .DiscreteTime import DiscreteTime
-        return DiscreteTime(args)
+class GatedAttMIL(nn.Module):
+    def __init__(self, d_in, d_att=128):
+        super().__init__()
+        self.V = nn.Linear(d_in, d_att, bias=True)
+        self.U = nn.Linear(d_in, d_att, bias=True)
+        self.w = nn.Linear(d_att, 1, bias=False)
+
+    def forward(self, feats, index, num_groups):
+        """
+        feats: (N, D)
+        index: (N,) long in [0, num_groups-1]
+        returns: (num_groups, D)
+        """
+        N, D = feats.shape
+        A = torch.tanh(self.V(feats)) * torch.sigmoid(self.U(feats))  # (N, d_att)
+        scores = self.w(A).squeeze(1)                                  # (N,)
+        # group-wise softmax over tiles per patient
+        # we compute softmax by subtracting max per group for stability
+        max_per_group = torch.full((num_groups,), -1e9, device=feats.device)
+        max_per_group = max_per_group.scatter_reduce(0, index, scores, reduce="amax", include_self=True)
+        scores_stab = scores - max_per_group.index_select(0, index)
+        exp_scores = scores_stab.exp()
+        denom = torch.zeros(num_groups, device=feats.device).scatter_add_(0, index, exp_scores)
+        weights = exp_scores / (denom.index_select(0, index) + 1e-8)   # (N,)
+        # weighted sum
+        out = torch.zeros(num_groups, D, device=feats.device).index_add_(0, index, feats * weights.unsqueeze(1))
+        return out
+
+def _aggregate_by_index(feats, index, num_groups, mode="mean", att_module: nn.Module = None):
+    if mode == "att":
+        assert att_module is not None, "Attention module is None but mode=='att'."
+        return att_module(feats, index, num_groups)
+
+    D = feats.size(1)
+    if mode == "mean":
+        summed = torch.zeros(num_groups, D, device=feats.device).index_add_(0, index, feats)
+        counts = torch.zeros(num_groups, device=feats.device).scatter_add_(0, index, torch.ones_like(index, dtype=feats.dtype))
+        return summed / (counts.clamp_min(1e-8).unsqueeze(1))
+    elif mode == "max":
+        # scatter_reduce requires PyTorch>=1.12. Fallback: do segmentwise max manually
+        out = torch.full((num_groups, D), -1e9, device=feats.device)
+        out = out.scatter_reduce(0, index.view(-1,1).expand(-1, D), feats, reduce="amax", include_self=True)
+        return out
+    elif mode == "min":
+        out = torch.full((num_groups, D), 1e9, device=feats.device)
+        out = out.scatter_reduce(
+            0, index.view(-1, 1).expand(-1, D), feats,
+            reduce="amin", include_self=True
+        )
+        return out
     else:
-        raise ValueError(f"Unknown method: {args.method}.")
+        raise ValueError(f"Unknown aggregation mode: {mode}")
 
 
 class CreateModel(nn.Module):
-    def __init__(self, args, freeze=False):
-        super(CreateModel, self).__init__()
-        self.model = get_model(args)
-        self.d_hid = self.model.d_hid
-        self.compute_loss = self.model.compute_loss
-        self.get_risk_logits = self.model.get_risk_logits
+    """
+    Patient-level wrapper:
+      - Encodes tiles with self.encoder
+      - Aggregates per patient using batch_patient_index
+      - Feeds patient embeddings to survival head
+    """
+    def __init__(self, args, freeze=False, aggregator="mean", att_dim=128):
+        super().__init__()
+        self.encoder = get_encoder(args)
+        self.d_hid = getattr(args, "d_hid", getattr(self.encoder, "d_hid", None))
+        if self.d_hid is None:
+            raise ValueError("d_hid not found: set args.d_hid or ensure encoder exposes .d_hid")
 
-        # freeze the params for teacher model
+        # survival heads take (D, n_classes) or (D, 1) depending on method
+        if args.method.lower() == 'deephit':
+            from .DeepHit import DeepHit
+            self.surv_model = DeepHit(self.d_hid, args.n_classes)
+        elif args.method.lower() == 'deepsurv':
+            from .DeepSurv import DeepSurv
+            self.surv_model = DeepSurv(self.d_hid, args.n_classes)
+        elif args.method.lower() == 'discrete':
+            from .DiscreteTime import DiscreteTime
+            self.surv_model = DiscreteTime(self.d_hid, args.n_classes)
+        else:
+            raise ValueError(f"Unknown method: {args.method}.")
+
+        # Aggregator selection
+        self.agg_mode = None
+        self.att_pool = None
+        if aggregator == 'mean':
+            self.agg_mode = "mean"
+        elif aggregator == 'max':
+            self.agg_mode = "max"
+        elif aggregator == 'min':
+            self.agg_mode = "min"
+        elif aggregator == 'att':
+            self.agg_mode = "att"
+            self.att_pool = GatedAttMIL(self.d_hid, d_att=att_dim)
+        else:
+            self.agg_mode = None
+            print("No valid aggregator specified: running at image level...")
+
+
+        # Optional freeze (for teacher)
+        self.freeze = freeze
         if freeze:
-            for param in self.model.parameters():
-                param.requires_grad = False
-        
-        self.ema_decay = args.ema_decay
-    
+            for p in self.encoder.parameters():
+                p.requires_grad = False
+            for p in self.surv_model.parameters():
+                p.requires_grad = False
+
+        self.ema_decay = getattr(args, "ema_decay", 0.999)
+
+    @torch.no_grad()
     def ema_update(self, student, step):
         alpha = min(1 - 1 / (step + 1), self.ema_decay)
-        for param_self, param_stu in zip(self.parameters(), student.parameters()):
-            param_self.data.mul_(alpha).add_(param_stu.data, alpha=1 - alpha)
-        
-    def forward(self, x):
-        return self.model(x)
+        for p_self, p_stu in zip(self.parameters(), student.parameters()):
+            p_self.data.mul_(alpha).add_(p_stu.data, alpha=1 - alpha)
+
+    def _select_input_tensor(self, data):
+        if "x" in data:            # eval path
+            return data["x"]
+        elif self.freeze:          # teacher uses weak
+            return data["xw"]
+        else:                      # student uses strong
+            return data["xs"]
+
+    def encode_tiles(self, data):
+        x = self._select_input_tensor(data)     # (Ntot, C, H, W)
+        feats = self.encoder(x)                 # Expect (Ntot, D)
+        return feats
+
+    def aggregate_patients(self, feats, data):
+        if self.agg_mode is None:
+            return feats, None  # tile-level, no grouping
+
+        if "batch_patient_index" not in data:
+            raise RuntimeError("batch_patient_index missing in data for patient-level aggregation.")
+
+        index = data["batch_patient_index"].to(feats.device).long()  # (Ntot,)
+        num_groups = int(index.max().item()) + 1 if index.numel() > 0 else 0
+
+        patient_feats = _aggregate_by_index(
+            feats, index, num_groups, mode=self.agg_mode, att_module=self.att_pool
+        )
+        return patient_feats, index
     
-    def get_features(self, x):
-        return self.model.encoder(x)
+    def aggregate_labels(self, data):
+        if hasattr(data, 'batch_patient_index'):
+            patient_idx = data.batch_patient_index       # (N_images,)
+            durations = data['duration']                 # (N_images,)
+            events = data['event']                       # (N_images,)
+            labels = data['label']                       # (N_images,)
+
+            num_patients = patient_idx.max().item() + 1
+
+            # Use scatter_reduce to compute patient-level aggregation
+            agg_duration = torch.full((num_patients,), -1e9, device=durations.device)
+            agg_duration = agg_duration.scatter_reduce(0, patient_idx, durations, reduce='amax', include_self=True)
+
+            agg_event = torch.zeros(num_patients, device=events.device)
+            agg_event = agg_event.scatter_reduce(0, patient_idx, events, reduce='amax', include_self=True)
+
+            agg_label = torch.zeros(num_patients, device=labels.device, dtype=labels.dtype)
+            agg_label = agg_label.scatter_reduce(0, patient_idx, labels, reduce='amax', include_self=True)
+
+            return agg_duration, agg_event, agg_label
+
+        else:
+            return data['duration'], data['event'], data['label']
+
+
+    def get_features(self, data):
+        feats = self.encode_tiles(data)
+        patient_feats, _ = self.aggregate_patients(feats, data)
+        return patient_feats
+
+    def get_surv_stats(self, feats):
+        return self.surv_model(feats)
+
+    def forward(self, data):
+        feats = self.get_features(data)
+        return self.get_surv_stats(feats)
+
+    def compute_loss(self, logits, event, duration, label, bs=None):
+        return self.surv_model.criterion(logits, event, duration, label, bs)
+    
+    @torch.no_grad()
+    def prepare_for_validation(self, train_loader, bin_times, device=None):
+        if device is None:
+            device = next(self.parameters()).device
+
+        durations_list, events_list, lp_list = [], [], []
+        for batch in train_loader:
+            batch = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in batch.items()}
+            out = self.forward(batch)
+            lp_list.append(out.risk.detach().cpu())
+            durations_list.append(batch['duration'].detach().cpu())
+            events_list.append(batch['event'].detach().cpu())
+
+        durations = torch.cat(durations_list).float()
+        events = torch.cat(events_list).int()
+        risk = torch.cat(lp_list).float()
+        
+        self.surv_model.prepare_for_validation(risk, durations, events, bin_times, device=device)
 
 
 class SurvivalQueue(nn.Module):
-    def __init__(self, dim, K, bin_func, expand_ratio=2.0, alpha=0.4, eps=1e-6):
+    def __init__(self, dim, K):
         super().__init__()
         self.K = K
         self.dim = dim
-        # self.num_bins = num_bins
-        self.bin_func = bin_func
-        self.expand_ratio = expand_ratio
-        self.alpha = alpha
-        self.eps = eps
 
         # Buffers for queue
         self.register_buffer("z", torch.zeros(K, dim))                # features
@@ -89,11 +246,6 @@ class SurvivalQueue(nn.Module):
         self.register_buffer("b", torch.zeros(K, dtype=torch.long))   # time bins
         self.register_buffer("ptr", torch.zeros(1, dtype=torch.long))
         self.register_buffer("size", torch.zeros(1, dtype=torch.long))
-
-        # Gaussian stats per bin (only event=1)
-        # self.register_buffer("mu", torch.zeros(num_bins, dim))
-        # self.register_buffer("var", torch.ones(num_bins, dim))
-        # self.register_buffer("count", torch.zeros(num_bins))
 
     @staticmethod
     def pair_rank_mat(durations: torch.Tensor, events: torch.Tensor) -> torch.Tensor:
@@ -109,107 +261,20 @@ class SurvivalQueue(nn.Module):
         rank_mat = self.pair_rank_mat(durations, events)
         risk_i = risk.view(-1, 1)
         risk_j = risk.view(1, -1)
-        risk_mat = (risk_i > risk_j).float()
-        viol_mat = rank_mat * (1 - risk_mat)
+        risk_mat = (risk_i < risk_j).float()
+        viol_mat = rank_mat * risk_mat
         hard_mask = (viol_mat.sum(dim=1) + viol_mat.sum(dim=0)) > 0
         return hard_mask
-
-    @torch.no_grad()
-    def _update_gaussians(self, z, b, e):
-        """Update Gaussian stats from event=1 samples."""
-        for bin_idx in b[e == 1].unique():
-            bin_mask = (b == bin_idx) & (e == 1)
-            if bin_mask.sum() == 0:
-                continue
-            z_bin = z[bin_mask]
-            Nb = z_bin.size(0)
-
-            mu_old = self.mu[bin_idx].clone()
-            cnt_old = self.count[bin_idx].item()
-            cnt_new = cnt_old + Nb
-            w_old = cnt_old / cnt_new
-            w_new = Nb / cnt_new
-
-            mu_new = w_old * mu_old + w_new * z_bin.mean(dim=0)
-            var_new = w_old * self.var[bin_idx] + w_new * z_bin.var(dim=0, unbiased=False)
-
-            self.mu[bin_idx] = mu_new
-            self.var[bin_idx] = var_new + self.eps
-            self.count[bin_idx] = cnt_new
-
-    @torch.no_grad()
-    def _sample_virtuals(self, N):
-        """Generate virtual samples from Gaussian estimates."""
-        virt_z, virt_e, virt_b = [], [], []
-        for _ in range(N):
-            bin_idx = torch.randint(0, self.num_bins, (1,)).item()
-            if self.count[bin_idx] < 2:  # not enough stats
-                continue
-            mu = self.mu[bin_idx]
-            var = self.var[bin_idx]
-            sample = mu + torch.randn_like(var) * var.sqrt()
-            virt_z.append(sample.unsqueeze(0))
-            virt_e.append(torch.tensor([1.0], device=mu.device))   # always event=1
-            virt_b.append(torch.tensor([bin_idx], device=mu.device))
-        if len(virt_z) == 0:
-            return None
-        return (torch.cat(virt_z, dim=0),
-                torch.cat(virt_e, dim=0),
-                torch.cat(virt_b, dim=0))
-
-    @torch.no_grad()
-    def interpolate_virtuals(self, z, t, e, b, num_virtual):
-        """Generate virtual samples by mixup on hard samples"""
-        if z.size(0) < 2 or num_virtual == 0:
-            return None
-
-        idx1 = torch.randint(0, z.size(0), (num_virtual,), device=z.device)
-        idx2 = torch.randint(0, z.size(0), (num_virtual,), device=z.device)
-
-        lam = torch.distributions.Beta(self.alpha, self.alpha).sample((num_virtual,)).to(z.device)
-        lam = lam.view(-1, 1)
-
-        z_new = lam * z[idx1] + (1 - lam) * z[idx2]
-        t_new = lam.squeeze() * t[idx1] + (1 - lam.squeeze()) * t[idx2]
-        e_new = e[idx1]  # both shall have e = 1
-        b_new = torch.from_numpy(self.bin_func(t_new.cpu().numpy())).to(z_new.device)
-
-        return z_new, t_new, e_new, b_new
 
     @torch.no_grad()
     def enqueue(self, risk, z_new, e_new, t_new, b_new):
         # 1) Find hard samples
         mask = self.find_hard_samples(risk, t_new, e_new)
-        # keep only the uncensored samples as real hard ones
-        mask = mask & (e_new == 1)
+        # mask = torch.ones_like(mask, dtype=torch.bool)
         hard_z = z_new[mask].detach()
         hard_e = e_new[mask].detach()
         hard_t = t_new[mask].detach()
-        hard_b = b_new[mask].detach()
-
-        # 2) Interpolation
-        B = hard_z.size(0)
-        virt_size = int(B * self.expand_ratio) if B > 0 else 0
-        if virt_size > 0:
-            virt_z, virt_t, virt_e, virt_b = self.interpolate_virtuals(hard_z, hard_b, hard_e, hard_b, virt_size)
-            if virt_z is not None:
-                hard_z = torch.cat([hard_z, virt_z], dim=0)
-                hard_t = torch.cat([hard_t, virt_t], dim=0)
-                hard_e = torch.cat([hard_e, virt_e], dim=0)
-                hard_b = torch.cat([hard_b, virt_b], dim=0)
-
-        # 2) Update Gaussian stats (from all event=1)
-        # self._update_gaussians(z_new, b_new, e_new)
-
-        # 3) Add virtuals
-        # Nh = hard_z.size(0)
-        # Nv = int(Nh * (self.virt_ratio / (1 - self.virt_ratio))) if Nh > 0 and self.virt_ratio > 0 else 0
-        # virt = self._sample_virtuals(Nv) if Nv > 0 else None
-        # if virt is not None:
-        #     vz, ve, vb = virt
-        #     hard_z = torch.cat([hard_z, vz], dim=0)
-        #     hard_e = torch.cat([hard_e, ve], dim=0)
-        #     hard_b = torch.cat([hard_b, vb], dim=0)        
+        hard_b = b_new[mask].detach()   
 
         # 4) Place into queue
         B = hard_z.size(0)

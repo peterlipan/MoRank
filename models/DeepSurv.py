@@ -1,83 +1,79 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbone import get_encoder
 from .utils import ModelOutputs
-from pycox.models.loss import CoxPHLoss
-import torchtuples as tt
-from pycox.models import CoxPH
 
 
 class CoxSurvLoss(nn.Module):
     def __init__(self, eps=1e-5):
         super().__init__()
-        self.cph = CoxPHLoss()
         self.eps = eps
-    def forward(self, logits, event, duration, label):
-        return self.cph(logits, duration, event)
+
+    def cox_ph_loss_sorted(self, log_h, events):
+        if events.dtype is torch.bool:
+            events = events.float()
+        events = events.view(-1)
+        log_h = log_h.view(-1)
+
+        gamma = log_h.max()
+        log_cumsum_h = log_h.sub(gamma).exp().cumsum(0).add(self.eps).log().add(gamma)
+        loss = - log_h.sub(log_cumsum_h).mul(events).sum().div(events.sum().add(self.eps))
+
+        return loss
+
+    def cox_ph_loss(self, log_h, durations, events, bs):
+        idx = durations.sort(descending=True)[1]
+        events = events[idx]
+        log_h = log_h[idx]
+        return self.cox_ph_loss_sorted(log_h, events)
+
+    def forward(self, logits, event, duration, label, bs=None):
+        return self.cox_ph_loss(logits, duration, event, bs)
 
 
 class DeepSurv(nn.Module):
-    def __init__(self, args):
+    def __init__(self, d_hid, n_classes):
         super(DeepSurv, self).__init__()
-        
-        self.encoder = get_encoder(args)
-        self.d_hid = args.d_hid if hasattr(args, 'd_hid') else self.encoder.d_hid
-        self.n_classes = args.n_classes
+
+        self.d_hid = d_hid
+        self.n_classes = n_classes
         self.head = nn.Linear(self.d_hid, 1)
         self.criterion = CoxSurvLoss()
-            # Baseline storage
-        self.event_times_ = None                  # distinct event times (tensor)
-        self.baseline_cum_hazard_ = None          # cumulative hazard at event times
-        self.baseline_surv_ = None                # baseline survival at event times
-        self.lp_mean_ = None                      # mean of lp if centered
+
+        self.event_times_ = None                 
+        self.baseline_cum_hazard_ = None          
+        self.baseline_surv_ = None                
+        self.lp_mean_ = None               
         self.centered_ = False
 
-        # Discrete time grid (bins) for evaluation
-        self.bin_times_ = None                    # tensor (n_bins,)
-        self.baseline_surv_bins_ = None           # baseline survival projected onto bin times
+        self.bin_times_ = None                    
+        self.baseline_surv_bins_ = None           
         self._baseline_ready_for_bins = False
 
-    def forward(self, x):
-        features = self.encoder(x)
+    def forward(self, features):
         logits = self.head(features)
-        risk = logits.view(-1)  # linear predictor (log hazard ratio)
+        risk = logits.view(-1)  
 
         surv = None
         if self.baseline_surv_bins_ is not None:
-            # Use centered linear predictor for survival estimation
             lp_centered = risk - self.lp_mean_ if self.centered_ and self.lp_mean_ is not None else risk
             hr = torch.exp(lp_centered).unsqueeze(1)  # (batch, 1)
-            # baseline_surv_bins_: (n_bins,)
             surv_baseline = self.baseline_surv_bins_.to(risk.device).unsqueeze(0)  # (1, n_bins)
             surv = surv_baseline ** hr   # S(t|x) = S0(t)^{exp(lp_centered)}
 
         return ModelOutputs(features=features, logits=logits, risk=risk, surv=surv)
-    
-    def get_risk_logits(self, features):
-        logits = self.head(features)
-        risk = logits.view(-1)  # linear predictor (log hazard ratio)
-        return ModelOutputs(logits=logits, risk=risk)
-
-    def compute_loss(self, logits, event, duration, label):
-        return self.criterion(logits, event, duration, label)
 
     @torch.no_grad()
     def configure_time_bins(self, bin_times):
-        """
-        Set the discrete evaluation time grid (length n_bins).
-        bin_times: 1D array-like sorted ascending (float or int).
-        """
         if not torch.is_tensor(bin_times):
             bin_times = torch.tensor(bin_times, dtype=torch.float32)
         self.bin_times_ = bin_times.float().clone()
-        # If we already have a baseline survival at event_times_, project it:
         if self.baseline_surv_ is not None:
             self._project_baseline_to_bins()
         return self
 
     @torch.no_grad()
-    def estimate_baseline_surv(self, train_loader, device=None, center=True, eps=1e-12):
+    def estimate_baseline_surv(self, risk, duration, event, device=None, center=True, eps=1e-12):
         """
         Breslow baseline cumulative hazard + survival. Must be called after training.
         """
@@ -87,17 +83,9 @@ class DeepSurv(nn.Module):
         if device is None:
             device = next(self.parameters()).device
 
-        durations_list, events_list, lp_list = [], [], []
-        for batch in train_loader:
-            x = batch['xs'].to(device)
-            out = self.forward(x)
-            lp_list.append(out.risk.detach().cpu())
-            durations_list.append(batch['duration'].detach().cpu())
-            events_list.append(batch['event'].detach().cpu())
-
-        durations = torch.cat(durations_list).float()
-        events = torch.cat(events_list).int()
-        lp = torch.cat(lp_list).float()
+        durations = duration.detach().cpu()
+        events = event.detach().cpu()
+        lp = risk.detach().cpu()
 
         if (events == 1).sum() == 0:
             raise ValueError("No events in training data; cannot estimate baseline hazard.")
@@ -172,14 +160,13 @@ class DeepSurv(nn.Module):
         self._baseline_ready_for_bins = True
 
     @torch.no_grad()
-    def prepare_for_validation(self, train_loader, bin_times, device=None, force=False):
+    def prepare_for_validation(self, risk, duration, event, bin_times, device=None,):
         """
         Convenience: estimate baseline (if not done or force=True) and set bin grid.
         bin_times: array-like length n_bins.
         Call this once before running surv_validate().
         """
-        if force or self.baseline_surv_ is None:
-            self.estimate_baseline_surv(train_loader, device=device)
+        self.estimate_baseline_surv(risk, duration, event, device=device)
         self.configure_time_bins(bin_times)
 
     @torch.no_grad()

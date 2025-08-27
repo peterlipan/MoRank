@@ -45,19 +45,20 @@ class Trainer:
     
     def _init_components(self):
         args = self.args
-        print(f"Train dataset size: {len(self.train_dataset)}, Test dataset size: {len(self.test_dataset)}")
+        print(f"(Training) Number of samples: {self.train_dataset.n_samples}, Number of patients: {self.train_dataset.n_patients}")
+        print(f"(Testing) Number of samples: {self.test_dataset.n_samples}, Number of patients: {self.test_dataset.n_patients}")
 
-        self.train_loader = DataLoader(self.train_dataset, batch_size=args.batch_size, 
+        self.train_loader = DataLoader(self.train_dataset, batch_size=args.batch_size, collate_fn=(self.train_dataset.training_collate_fn if args.patient_level else None),
                                        shuffle=True, num_workers=args.workers, drop_last=True, pin_memory=True)
-        self.test_loader = DataLoader(self.test_dataset, batch_size=args.batch_size, 
+        self.test_loader = DataLoader(self.test_dataset, batch_size=args.batch_size, collate_fn=(self.test_dataset.testing_collate_fn if args.patient_level else None),
                                       shuffle=False, num_workers=args.workers, drop_last=False, pin_memory=True)
         
         args.n_classes = self.train_dataset.n_classes
         args.n_features = self.train_dataset.n_features
 
-        self.student = CreateModel(args, freeze=False).cuda()
-        self.teacher = CreateModel(args, freeze=True).cuda()
-        self.queue = SurvivalQueue(self.student.d_hid, args.queue_size, self.train_dataset._duration_to_label, args.virt_ratio, args.alpha).cuda()
+        self.student = CreateModel(args, freeze=False, aggregator=args.aggregator).cuda()
+        self.teacher = CreateModel(args, freeze=True, aggregator=args.aggregator).cuda()
+        self.queue = SurvivalQueue(self.student.d_hid, args.queue_size).cuda()
 
         self.ranking_criteria = RankConsistencyLoss(weight=args.lambda_rank)
 
@@ -148,32 +149,36 @@ class Trainer:
             for data in self.train_loader:
                 data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
 
-                stu_feat = self.student.get_features(data['xs'])
-                tch_feat = self.teacher.get_features(data['xw'])
-                tch_est = self.teacher.get_risk_logits(tch_feat) # for ranking consistency
+                stu_feat = self.student.get_features(data)
+                tch_feat = self.teacher.get_features(data)
+                stu_est = self.student.get_surv_stats(stu_feat)
+                tch_est = self.teacher.get_surv_stats(tch_feat)
                 bs = stu_feat.size(0)
+                q_size = self.queue.size.item()
+
+                # get the labels in the batch with optional patient-level aggregation
+                bch_dur, bch_event, bch_label = self.teacher.aggregate_labels(data)
+
+                # if the queue is not empty
+                if args.queue and q_size > 0:
+                    mem_feat, mem_event, mem_dur, mem_bins = self.queue.get()
+                    # feed into the teacher model
+                    mem_est = self.teacher.get_surv_stats(mem_feat)
+                    # concat the risk and durations for ranking
+                    logits = torch.concat([stu_est.logits, mem_est.logits], dim=0)
+                    duration = torch.concat([bch_dur, mem_dur], dim=0)
+                    event = torch.concat([bch_event, mem_event], dim=0)
+                    label = torch.concat([bch_label, mem_bins], dim=0)
+                    loss = self.student.compute_loss(logits, event, duration, label, bs)
+                # otherwise, only calculate the ranking loss on the current batch
+                else:
+                    loss = self.student.compute_loss(stu_est.logits, bch_event, bch_dur, bch_label)
 
                 # store the current batch into mem bank
-                self.queue.enqueue(tch_est.risk, tch_feat, data['event'], data['duration'], data['label'])
-                q_size = self.queue.size.item()
-                # fetch the samples in the bank
-                mem_feat, mem_event, mem_dur, mem_bins = self.queue.get()
-
                 if args.queue:
-                    # concat the batch and bank samples for ranking
-                    feat = torch.cat([stu_feat, mem_feat], dim=0)
-                    event = torch.cat([data['event'], mem_event], dim=0)
-                    duration = torch.cat([data['duration'], mem_dur], dim=0)
-                    label = torch.cat([data['label'], mem_bins], dim=0)
-                else:
-                    feat = stu_feat
-                    event = data['event']
-                    duration = data['duration']
-                    label = data['label']
-                stu_est = self.student.get_risk_logits(feat)
+                    self.queue.enqueue(stu_est.risk, tch_feat, bch_event, bch_dur, bch_label)
 
-                loss = self.student.compute_loss(stu_est.logits, event, duration, label)
-                loss += self.ranking_criteria(stu_est.logits[:bs], tch_est.logits[:bs]) # ranking consistency only on the batch
+                loss += self.ranking_criteria(stu_est.logits, tch_est.logits) # ranking consistency only on the batch
 
                 print(f"\rFold {self.fold} | Epoch {i} | Iter {cur_iters} | Loss: {loss.item()} | Q Size {q_size}", end='', flush=True)
 
@@ -231,24 +236,27 @@ class Trainer:
         self.student.train(training)
         return metric_dict
 
-    def surv_validate(self):
+    def surv_validate(self):  # patient-level evaluation
         args = self.args
         training = self.student.training
         self.student.eval()
 
         loss = 0.0
-            
-        event_indicator = torch.Tensor().cuda() # whether the event (death) has occurred
-        duration = torch.Tensor().cuda()
-        risk_prob = torch.Tensor().cuda()
-        surv_prob = torch.Tensor().cuda()
 
-        # calculate the baseline_surv for deepsurv
+        event_indicator = []
+        duration = []
+        risk_prob = []
+        surv_prob = []
+        patient_idx = []
+
+        # for DeepSurv baseline survival
         if args.method.lower() == 'deepsurv':
-            bin_times = torch.arange(self.train_dataset.n_classes, dtype=torch.float32)  # or dataset.bin_times
-            self.student.model.prepare_for_validation(self.train_loader, bin_times.to(duration.device))
+            bin_times = torch.arange(self.train_dataset.n_classes, dtype=torch.float32)
+            self.student.prepare_for_validation(
+                self.train_loader, bin_times.cuda()
+            )
 
-        # for estimating censoring distribution in the training set
+        # training survival data for IPCW
         train_duration = self.train_dataset.duration
         train_event = self.train_dataset.event.astype(bool)
         train_surv = Surv.from_arrays(event=train_event, time=train_duration)
@@ -256,39 +264,72 @@ class Trainer:
         with torch.no_grad():
             for data in self.test_loader:
                 data = {k: v.cuda(non_blocking=True) if hasattr(v, 'cuda') else v for k, v in data.items()}
-                outputs = self.student(data['x'])
-                batch_loss = self.student.compute_loss(outputs.logits, data['event'], data['duration'], data['label'])
+                outputs = self.student(data)
+                # get the labels in the batch with optional patient-level aggregation
+                bch_dur, bch_event, bch_label = self.student.aggregate_labels(data)
+                batch_loss = self.student.compute_loss(outputs.logits, bch_event, bch_dur, bch_label)
                 loss += batch_loss.item()
-                
+
                 risk = outputs.risk
-                event_indicator = torch.cat((event_indicator, data['event']), dim=0)
-                duration = torch.cat((duration, data['duration']), dim=0)
-                risk_prob = torch.cat((risk_prob, risk), dim=0)
-                if hasattr(outputs, 'surv'):
-                    surv_prob = torch.cat((surv_prob, outputs.surv), dim=0)
+
+                event_indicator.append(data['event'].cpu().numpy())
+                duration.append(data['duration'].cpu().numpy())
+                risk_prob.append(risk.cpu().numpy())
+                surv_prob.append(outputs.surv.cpu().numpy())
+                patient_idx.extend(data['patient_id'])
+
+        event_indicator = np.concatenate(event_indicator).astype(bool)
+        duration = np.concatenate(duration)
+        risk_prob = np.concatenate(risk_prob)
+        surv_prob = np.concatenate(surv_prob)
+        patient_idx = np.array(patient_idx)
+
+        if hasattr(args, "aggregate"):
+            agg = args.aggregate.lower()
+
+            patient_risk, patient_surv, patient_event, patient_time = [], [], [], []
+            for pid in np.unique(patient_idx):
+                mask = patient_idx == pid
+                risks = risk_prob[mask]
+                survs = surv_prob[mask]
+
+                if agg == "mean":
+                    patient_risk.append(np.mean(risks))
+                    patient_surv.append(np.mean(survs, axis=0))
+                elif agg == "max": # take the sample with the highest risk as the representative one
+                    i = np.argmax(risks)
+                    patient_risk.append(risks[i])
+                    patient_surv.append(survs[i])
+                elif agg == "min": # take the sample with the lowest risk as the representative one
+                    i = np.argmin(risks)
+                    patient_risk.append(risks[i])
+                    patient_surv.append(survs[i])
                 else:
-                    surv_prob = None
-            
-            event_indicator = event_indicator.cpu().detach().numpy().astype(bool)
-            duration = duration.cpu().detach().numpy()
-            risk_prob = risk_prob.cpu().detach().numpy()
-            surv_prob = surv_prob.cpu().detach().numpy() if surv_prob is not None else None
-            test_surv = Surv.from_arrays(event=event_indicator, time=duration)
+                    raise ValueError(f"Unknown aggregation method: {agg}")
 
-            n_eval = int(args.n_bins * 10) if args.n_bins > 0 else 3000
-            valid_durations = duration[event_indicator]
-            time_points = np.linspace(valid_durations.min(), valid_durations.max() - 1, n_eval)
-            time_labels = self.test_dataset._duration_to_label(time_points)
+                # assume event/time consistent per patient
+                patient_event.append(event_indicator[mask][0])
+                patient_time.append(duration[mask][0])
 
-            surv_prob = surv_prob[:, time_labels] if surv_prob is not None else None
+            risk_prob = np.array(patient_risk)
+            event_indicator = np.array(patient_event)
+            duration = np.array(patient_time)
+            surv_prob = np.array(patient_surv)
 
-            metric_dict = compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, time_points)
-            metric_dict['Loss'] = loss / len(self.test_loader)
+        test_surv = Surv.from_arrays(event=event_indicator, time=duration)
+        n_eval = int(args.n_bins * 10) if args.n_bins > 0 else 3000
+        valid_durations = duration[event_indicator]
+        time_points = np.linspace(valid_durations.min(), valid_durations.max() - 1, n_eval)
+        time_labels = self.test_dataset._duration_to_label(time_points)
+
+        surv_prob = surv_prob[:, time_labels] if surv_prob is not None else None
+
+        metric_dict = compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, time_points)
+        metric_dict['Loss'] = loss / len(self.test_loader)
 
         self.student.train(training)
-
         return metric_dict
-    
+
     def validate(self):
         args = self.args
         if args.task.lower() == 'classification':

@@ -80,8 +80,8 @@ class METABRICDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.aug:
-            xs = strong_aug(self.data[idx])
-            xw = weak_aug(self.data[idx])
+            xs = weak_aug(self.data[idx])
+            xw = self.data[idx]
             return {
                 'xs': torch.tensor(xs, dtype=torch.float32),
                 'xw': torch.tensor(xw, dtype=torch.float32),

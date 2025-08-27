@@ -17,4 +17,11 @@ class RankConsistencyLoss(nn.Module):
         # for deephit/discrete, which returns a distribution on time bins, we estimate intra-bin ranking
         stu_rank = F.log_softmax(stu_logits, dim=0)
         tch_rank = F.log_softmax(tch_logits, dim=0)
-        return self.weight * self.kl(stu_rank, tch_rank)
+
+        # for calibration, encourage consistent surv prob between two models
+        stu_prob = F.log_softmax(stu_logits, dim=-1)
+        tch_prob = F.log_softmax(tch_logits, dim=-1)
+
+        kl_loss = self.kl(stu_rank, tch_rank) + self.kl(stu_prob, tch_prob)
+
+        return self.weight * kl_loss

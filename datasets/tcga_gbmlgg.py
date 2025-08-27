@@ -4,8 +4,9 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 import albumentations as A
-from albumentations.pytorch import ToTensorV2
-from sklearn.model_selection import KFold
+from torch.utils.data import Dataset
+from sklearn.model_selection import KFold, StratifiedKFold
+from .augmentations import Transforms
 
 
 def aggregate_data(root, dst):
@@ -59,36 +60,12 @@ class TcgaGbmLggData:
         self.kfold = kfold
         self.seed = seed
         self.backbone = backbone
-        self.n_features = 224 if backbone.startswith(('resnet', 'densenet', 'efficient')) else 1024  # RNNs are fixed to 224. Use original size for Vision Transformers
-        
-        self.train_transform = A.Compose([
-            A.Resize(height=self.n_features, width=self.n_features),
-            A.HorizontalFlip(p=.5),
-            A.VerticalFlip(p=.5),
-            A.RandomRotate90(p=.5),
-            A.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.2, rotate_limit=45, p=.5),
-            A.OneOf([
-                    A.ElasticTransform(p=.5),
-                    A.GridDistortion(p=.5),
-                    A.OpticalDistortion(p=.5),
-                ], p=.5),
-            A.OneOf([
-                A.RandomGridShuffle(grid=(3, 3), p=.5),
-                A.RandomGridShuffle(grid=(7, 7), p=.5),
-                A.RandomGridShuffle(grid=(11, 11), p=.5),
-            ], p=.5),
-            A.ColorJitter(p=.5),
-            A.RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.5),
-            A.ChannelShuffle(p=.5),
-            A.RandomBrightnessContrast(p=0.5),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2(),
-        ])
-        self.test_transform = A.Compose([
-            A.Resize(height=self.n_features, width=self.n_features),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2(),
-        ])
+        self.n_features = 224 if backbone.startswith(('resnet', 'densenet', 'efficient')) else 1024  # CNNs are fixed to 224. Use original size for Vision Transformers
+        transform = Transforms(self.n_features)
+
+        self.strong_transform = transform.strong_transform
+        self.weak_transform = transform.weak_transform
+        self.test_transform = transform.test_transform
 
         if not os.path.exists(self.pickle_path):
             os.makedirs(os.path.dirname(self.pickle_path), exist_ok=True)
@@ -144,21 +121,22 @@ class TcgaGbmLggData:
         pid = np.unique(self.patient)
         patient_event = np.array([self.event[self.patient == p][0] for p in pid])
         if self.stratify:
-            kf = KFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
+            kf = StratifiedKFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
             for train_idx, test_idx in kf.split(pid, patient_event):
                 train_idx = np.where(np.isin(self.patient, pid[train_idx]))[0]
                 test_idx = np.where(np.isin(self.patient, pid[test_idx]))[0]
-                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform, training=True), TcgaGbmLggImageDataset(self, test_idx, self.test_transform, training=False)
+                yield TcgaGbmLggImageDataset(self, train_idx, training=True), TcgaGbmLggImageDataset(self, test_idx, training=False)
         else:
             kf = KFold(n_splits=self.kfold, shuffle=True, random_state=self.seed)
             for train_idx, test_idx in kf.split(pid):
                 train_idx = np.where(np.isin(self.patient, pid[train_idx]))[0]
                 test_idx = np.where(np.isin(self.patient, pid[test_idx]))[0]
-                yield TcgaGbmLggImageDataset(self, train_idx, self.train_transform, training=True), TcgaGbmLggImageDataset(self, test_idx, self.test_transform, training=False)
+                yield TcgaGbmLggImageDataset(self, train_idx, training=True), TcgaGbmLggImageDataset(self, test_idx, training=False)
 
 
-class TcgaGbmLggImageDataset:
-    def __init__(self, tcga_data, indices, transform, training=False):
+class TcgaGbmLggImageDataset(Dataset):
+    def __init__(self, tcga_data, indices, training=False):
+        super().__init__()
         self.duration = tcga_data.duration[indices]
         self.event = tcga_data.event[indices]
         self.label = tcga_data.label[indices]
@@ -167,9 +145,11 @@ class TcgaGbmLggImageDataset:
         self.n_features = tcga_data.n_features
         self.n_classes = tcga_data.n_classes
         self.n_events = np.unique(self.event).size
-        self.transform = transform
         self._duration_to_label = tcga_data._duration_to_label
         self.training = training
+        self.strong_transform = tcga_data.strong_transform
+        self.weak_transform = tcga_data.weak_transform
+        self.test_transform = tcga_data.test_transform
 
     def __len__(self):
         return len(self.path)
@@ -180,24 +160,22 @@ class TcgaGbmLggImageDataset:
         image = np.array(image)
 
         if self.training:
-            xs = self.transform(image=image)['image']
-            xw = self.transform(image=image)['image']
+            xs = self.strong_transform(image=image)['image']
+            xw = self.weak_transform(image=image)['image']
             return {
                 'xs': xs,
                 'xw': xw,
                 'duration': self.duration[idx],
                 'event': self.event[idx],
                 'label': self.label[idx],
+                'patient_id': self.patient[idx]
             }
         else:
-            x = self.transform(image=image)['image']
+            x = self.test_transform(image=image)['image']
             return {
                 'x': x,
                 'duration': self.duration[idx],
                 'event': self.event[idx],
                 'label': self.label[idx],
+                'patient_id': self.patient[idx]
             }
-
-
-
-

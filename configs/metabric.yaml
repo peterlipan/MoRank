@@ -1,5 +1,5 @@
 # environment
-visible_gpus: '0'
+visible_gpus: '1'
 seed: 42
 
 # dataset
@@ -12,31 +12,32 @@ results: './results'
 
 kfold: 5
 stratify: True
-n_bins: 25
-normalize: False
+n_bins: 18
+normalize: True
 
 # model
 method: 'deepsurv' # 'deephit', 'deepsurv', 'discrete'
 backbone: 'MLP'
 n_layers: 2
-d_hid: 1024
+d_hid: 512
 dropout: 0.
 activation: 'tanh'
+fold: 0
 
 # ours
 queue_size: 512
 lambda_rank: 0.
 ema_decay: 0.999
 queue: False
-virt_ratio: 1.0
+virt_ratio: 0.
 alpha: 0.4
 
 # training
 workers: 0
 optimizer: 'Adam'
-epochs: 100
+epochs: 50
 batch_size: 256
 lr: 2.0e-4
-lr_policy: 'cosine'
-weight_decay: 0.01
+lr_policy: ''
+weight_decay: 0.
 verbose: True

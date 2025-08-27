@@ -115,7 +115,5 @@ def compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, times):
 
     metrics = {'C-index': cindex, 'C-index IPCW': cindex_ipcw, 'AUC': mean_auc, 'IBS': ibs}
 
-
     metrics = {k: v for k, v in metrics.items()}
     return metrics
-    

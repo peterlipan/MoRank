@@ -25,3 +25,7 @@ def CreateDataset(args):
     elif args.dataset.lower() == 'knee_osteoarthritis':
         from .knee_osteoarthritis import KneeOsteoarthritisData
         return KneeOsteoarthritisData(root=args.data_root, backbone=args.backbone)
+    elif args.dataset.lower() == 'collagen':
+        from .collagen import CollagenData
+        return CollagenData(data_root=args.data_root, xlsx_path=args.xlsx_path, backbone=args.backbone,
+                            n_bins=args.n_bins, stratify=args.stratify, kfold=args.kfold, seed=args.seed, patient_level=args.patient_level)

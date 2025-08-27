@@ -1,0 +1,45 @@
+# environment
+visible_gpus: '1'
+seed: 42
+
+# dataset
+dataset: 'collagen'
+task: 'survival'
+data_root: "/datastorage/li/CollagenRawImages"
+xlsx_path: "./datasets/Collagen_Images_Jul8.xlsx"
+checkpoints: './checkpoints'
+results: './results'
+
+kfold: 5
+stratify: True
+n_bins: 25
+
+# model
+method: 'deepsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+backbone: 'resnet18'
+patch_size: 16
+pretrained: True
+fold: 0
+aggregator: "mean"
+patient_level: True
+
+# ours
+queue_size: 1024
+lambda_rank: 0.
+ema_decay: 0.999
+queue: False
+virt_ratio: 0.
+alpha: 0.4
+
+# patient-level evaluation
+# aggregate: "mean"
+
+# training
+workers: 0
+optimizer: 'Adam'
+epochs: 20
+batch_size: 24
+lr: 2.0e-4
+lr_policy: 'cosine'
+weight_decay: 0.01
+verbose: True

@@ -22,18 +22,19 @@ pretrained: True
 fold: 0
 
 # ours
-queue_size: 512
-lambda_rank: 0.
+queue_size: 1024
+lambda_rank: 0.1
 ema_decay: 0.999
-queue: False
-virt_ratio: 1.0
+queue: True
+virt_ratio: 0.
 alpha: 0.4
+aggregate: "max"
 
 # training
 workers: 0
 optimizer: 'Adam'
 epochs: 20
-batch_size: 128
+batch_size: 256
 lr: 2.0e-4
 lr_policy: 'cosine'
 weight_decay: 0.01
