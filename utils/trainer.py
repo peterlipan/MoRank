@@ -286,7 +286,6 @@ class Trainer:
         if censor_mask.any():
             max_censor_time = duration[censor_mask].max()
             max_time = duration[(event_indicator) & (duration < max_censor_time)].max()
-            print(f"Max censoring time: {max_censor_time}, max eval time: {max_time}")
         else:
             max_time = duration.max()  # no censoring case
 
