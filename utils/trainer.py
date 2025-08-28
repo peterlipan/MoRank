@@ -283,11 +283,11 @@ class Trainer:
 
         test_surv = Surv.from_arrays(event=event_indicator, time=duration)
         n_eval = int(args.n_bins * 10) if args.n_bins > 0 else 3000
-        valid_durations = duration[event_indicator]
+        valid_durations = duration[~event_indicator]
         time_points = np.linspace(valid_durations.min(), valid_durations.max() - 1, n_eval)
         time_labels = self.test_dataset._duration_to_label(time_points)
 
-        surv_prob = surv_prob[:, time_labels] if surv_prob is not None else None
+        surv_prob = surv_prob[:, time_labels]
 
         metric_dict = compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, time_points)
         metric_dict['Loss'] = loss / len(self.test_loader)

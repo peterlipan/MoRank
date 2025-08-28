@@ -101,19 +101,44 @@ def compute_cls_metrics(ground_truth, activations, avg='micro', demical_places=4
 
 
 def compute_surv_metrics(train_surv, test_surv, risk_prob, surv_prob, times):
+    # ---- Plain C-index (full data) ----
+    cindex, *_ = concordance_index_censored(
+        test_surv["event"], test_surv["time"], risk_prob
+    )
 
+    # ---- IPCW-safe test set ----
+    test_ipcw, risk_ipcw, surv_ipcw = test_surv, risk_prob, surv_prob
+    censor_mask = ~test_ipcw["event"]
 
-    cindex, *_ = concordance_index_censored(test_surv['event'], test_surv['time'], risk_prob)
-    cindex_ipcw, *_ = concordance_index_ipcw(train_surv, test_surv, risk_prob)
-    ibs = integrated_brier_score(train_surv, test_surv, surv_prob, times) if surv_prob is not None else 0
-    auc, mean_auc = cumulative_dynamic_auc(train_surv, test_surv, 1 - surv_prob, times) if surv_prob is not None else (0, 0)
-    # set AUC as 0 if it is NaN
+    if censor_mask.any():
+        max_censor_time = test_ipcw["time"][censor_mask].max()
+        drop_mask = (test_ipcw["event"]) & (test_ipcw["time"] >= max_censor_time)
+        if drop_mask.any():
+            print(f"\n[Warning] Dropping {drop_mask.sum()} event(s) at/after censoring max={max_censor_time} for IPCW-based metrics.")
+            test_ipcw = test_ipcw[~drop_mask]
+            risk_ipcw = risk_ipcw[~drop_mask]
+            surv_ipcw = surv_ipcw[~drop_mask]
+
+        # ensure times fit within new support
+        max_time_ipcw = test_ipcw["time"].max()
+        times = times[times < max_time_ipcw]
+
+    # ---- IPCW C-index ----
+    cindex_ipcw, *_ = concordance_index_ipcw(train_surv, test_ipcw, risk_ipcw)
+
+    # ---- Integrated Brier Score ----
+    ibs = integrated_brier_score(train_surv, test_ipcw, surv_ipcw, times)
+
+    # ---- Time-dependent AUC ----
+    auc, mean_auc = cumulative_dynamic_auc(train_surv, test_ipcw, 1 - surv_ipcw, times)
     if np.isnan(mean_auc):
-        print(auc)
-        raise ValueError("AUC is NaN, check the survival probabilities or time points.")
-    
+        raise ValueError("AUC is NaN — check survival probabilities or time points.")
 
-    metrics = {'C-index': cindex, 'C-index IPCW': cindex_ipcw, 'AUC': mean_auc, 'IBS': ibs}
-
-    metrics = {k: v for k, v in metrics.items()}
+    # ---- Collect metrics ----
+    metrics = {
+        "C-index": cindex,
+        "C-index IPCW": cindex_ipcw,
+        "AUC": mean_auc,
+        "IBS": ibs,
+    }
     return metrics

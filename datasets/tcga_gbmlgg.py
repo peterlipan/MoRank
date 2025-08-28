@@ -82,28 +82,13 @@ class TcgaGbmLggData:
         self.path = data['path']
         self.grade = data['grade']
 
-        if task == 'classification':
-            # some g = -1. mask those samples out
-            mask = self.grade != -1
-            self.omic = self.omic[mask]
-            self.duration = self.duration[mask]
-            self.event = self.event[mask]
-            self.patient = self.patient[mask]
-            self.path = self.path[mask]
-            self.grade = self.grade[mask]
-            # label = grade in this task
-            self.label = self.grade.astype(np.int64) + 1 # dummy class for the head of CDF
-            self.n_classes = len(np.unique(self.label)) + 2  # +2 for edge bins
-
-        elif task == 'survival':
-            if n_bins > 0:
-                self.bin_durations(n_bins)
-                self.n_classes = n_bins  # for edge bins
-            else:
-                self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
-                self.label = self.duration.astype(np.int64)  # convert to int64 for compatibility
+        if n_bins > 0:
+            self.bin_durations(n_bins)
+            self.n_classes = n_bins  # for edge bins
         else:
-            raise ValueError(f"Unsupported task: {task}")
+            self.n_classes = int(np.max(self.duration) * 1.2)  # default DeepHit-style horizon
+            self.label = self.duration.astype(np.int64)  # convert to int64 for compatibility
+
         
     def bin_durations(self, n_bins):
         # Bin duration using quantiles (equal number of samples per bin)

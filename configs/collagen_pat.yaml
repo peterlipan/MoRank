@@ -19,12 +19,11 @@ method: 'deepsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord',
 backbone: 'resnet18'
 patch_size: 16
 pretrained: True
-fold: 0
 aggregator: "mean"
 patient_level: True
 
 # ours
-queue_size: 72
+queue_size: 128
 lambda_rank: 0.
 ema_decay: 0.999
 queue: False
@@ -32,13 +31,13 @@ virt_ratio: 0.
 alpha: 0.4
 
 # patient-level evaluation. meaningless for patient-level models
-metric_agg: "mean"
+metric_agg: "None"
 
 # training
 workers: 0
 optimizer: 'Adam'
 epochs: 20
-batch_size: 24
+batch_size: 48
 lr: 2.0e-4
 lr_policy: 'cosine'
 weight_decay: 0.01
