@@ -5,14 +5,10 @@ import pandas as pd
 from sksurv.util import Surv
 from models import CreateModel, SurvivalQueue
 from datasets import CreateDataset
-from .metrics import ordinal_metrics, compute_surv_metrics
+from .metrics import compute_surv_metrics
 from torch.utils.data import DataLoader
 from .losses import RankConsistencyLoss
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import Normalize
-import matplotlib.cm as cm
-
 
 class MetricLogger:
     def __init__(self, n_folds):
@@ -30,7 +26,6 @@ class MetricLogger:
         for metric in avg_metrics:
             avg_metrics[metric] = np.mean([fold[metric] for fold in self.fold_metrics])
         return avg_metrics
-
 
 
 class Trainer:
@@ -283,8 +278,20 @@ class Trainer:
 
         test_surv = Surv.from_arrays(event=event_indicator, time=duration)
         n_eval = int(args.n_bins * 10) if args.n_bins > 0 else 3000
-        valid_durations = duration[~event_indicator]
-        time_points = np.linspace(valid_durations.min(), valid_durations.max() - 1, n_eval)
+        # Earliest event
+        min_time = duration[event_indicator].min()
+
+        # Last evaluable time = largest event time strictly less than max censoring
+        censor_mask = ~event_indicator
+        if censor_mask.any():
+            max_censor_time = duration[censor_mask].max()
+            max_time = duration[(event_indicator) & (duration < max_censor_time)].max()
+            print(f"Max censoring time: {max_censor_time}, max eval time: {max_time}")
+        else:
+            max_time = duration.max()  # no censoring case
+
+        # Sample times within [min_time, max_time]
+        time_points = np.linspace(min_time, max_time, n_eval)
         time_labels = self.test_dataset._duration_to_label(time_points)
 
         surv_prob = surv_prob[:, time_labels]

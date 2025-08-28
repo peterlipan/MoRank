@@ -19,6 +19,7 @@ method: 'deepsurv' # ''deephit', 'deepsurv', 'discrete'
 backbone: 'resnet18'
 patch_size: 16
 pretrained: True
+fold: 4
 aggregator: "None"
 patient_level: False
 

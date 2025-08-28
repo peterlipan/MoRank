@@ -3,9 +3,9 @@ visible_gpus: '1'
 seed: 42
 
 # dataset
-dataset: 'collagen'
-data_root: "/datastorage/li/CollagenRawImages"
-xlsx_path: "./datasets/Collagen_Images_Jul8.xlsx"
+dataset: 'gbmlgg'
+data_root: "/datastorage/li/TCGA_GBMLGG"
+pickle_path: "./datasets/TCGA_GBMLGG/tcga_gbmlgg.pkl"
 checkpoints: './checkpoints'
 results: './results'
 
@@ -18,25 +18,26 @@ method: 'deepsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord',
 backbone: 'resnet18'
 patch_size: 16
 pretrained: True
-aggregator: "max"
+aggregator: "mean"
 patient_level: True
 
+
 # ours
-queue_size: 128
+queue_size: 1024
 lambda_rank: 0.
 ema_decay: 0.999
 queue: False
 virt_ratio: 0.
 alpha: 0.4
 
-# patient-level evaluation. meaningless for patient-level models
-metric_agg: "None"
+# patient-level evaluation
+metric_agg: "None" # 'None' | 'mean' | 'max' | 'min'
 
 # training
 workers: 0
 optimizer: 'Adam'
 epochs: 20
-batch_size: 48
+batch_size: 200
 lr: 2.0e-4
 lr_policy: 'cosine'
 weight_decay: 0.01
