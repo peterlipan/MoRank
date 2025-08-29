@@ -317,6 +317,10 @@ class Trainer:
         settings = ['Dataset', 'Method', 'Model', 'KFold', 'Epochs', 'Seed', 'Bins', 'Evaluation Aggregation', 'Model Aggregator']
         kwargs = ['dataset','method', 'backbone', 'kfold', 'epochs', 'seed', 'n_bins', 'metric_agg', 'aggregator']
 
+        if hasattr(args, 'compartment'):
+            settings.append('Compartment')
+            kwargs.append('compartment')
+
         set2kwargs = {k: v for k, v in zip(settings, kwargs )}
 
         metric_names = self.m_logger.metrics()

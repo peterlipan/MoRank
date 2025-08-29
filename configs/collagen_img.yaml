@@ -9,6 +9,7 @@ data_root: "/datastorage/li/CollagenRawImages"
 xlsx_path: "./datasets/Collagen_Images_Jul8.xlsx"
 checkpoints: './checkpoints'
 results: './results'
+compartment: 'stroma'
 
 kfold: 5
 stratify: True
@@ -19,7 +20,6 @@ method: 'deepsurv' # ''deephit', 'deepsurv', 'discrete'
 backbone: 'resnet18'
 patch_size: 16
 pretrained: True
-fold: 4
 aggregator: "None"
 patient_level: False
 

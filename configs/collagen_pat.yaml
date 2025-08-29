@@ -5,24 +5,25 @@ seed: 42
 # dataset
 dataset: 'collagen'
 data_root: "/datastorage/li/CollagenRawImages"
-xlsx_path: "./datasets/Collagen_Images_Jul8.xlsx"
+xlsx_path: "./datasets/Collagen_Images_Jun12.xlsx"
 checkpoints: './checkpoints'
 results: './results'
+compartment: 'stroma'
 
 kfold: 5
 stratify: True
 n_bins: 25
 
 # model
-method: 'deepsurv' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
+method: 'discrete' # 'ordsurv', 'deephit', 'deepsurv', 'discrete', 'angularord', 'ordsoftmax'
 backbone: 'resnet18'
 patch_size: 16
 pretrained: True
-aggregator: "max"
+aggregator: "mean"
 patient_level: True
 
 # ours
-queue_size: 128
+queue_size: 196
 lambda_rank: 0.
 ema_decay: 0.999
 queue: False

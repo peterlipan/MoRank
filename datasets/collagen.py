@@ -11,7 +11,7 @@ from .augmentations import Transforms
 
 
 class CollagenData:
-    def __init__(self, data_root, xlsx_path, backbone, n_bins=-1, stratify=True, kfold=5, seed=42, patient_level=False):
+    def __init__(self, data_root, xlsx_path, backbone, n_bins=-1, stratify=True, kfold=5, seed=42, patient_level=False, compartment='both'):
         self.data_root = data_root
         self.xlsx_path = xlsx_path
         self.backbone = backbone
@@ -29,6 +29,18 @@ class CollagenData:
 
         self.df = pd.read_excel(self.xlsx_path)
         self.df = self.df.dropna(subset=['Overall.Survival.Months', 'Overall.Survival.Status'])
+
+        self.compartment = compartment
+        if compartment.lower() == 'stroma':
+            print("Using Stroma compartment")
+            self.df = self.df[self.df['Tumour_Stroma'] == 'Stroma']
+        elif compartment.lower() == 'tumor':
+            print("Using Tumor compartment")
+            self.df = self.df[self.df['Tumour_Stroma'] == 'Tumor']
+        elif compartment.lower() == 'both':
+            print("Using Both compartments")
+        else:
+            raise ValueError("Compartment must be 'stroma', 'tumor', or 'both'")
         
         if n_bins > 0:
             self.df['label'] = self.bin_durations(self.df['Overall.Survival.Months'].values, n_bins)
@@ -103,6 +115,7 @@ class CollagenDataset(Dataset):
         label = row['label']
         patient_id = row['BBNumber']
 
+        # Read Raw Image
         path_r = os.path.join(self.root, f"{row['Folder']}_R", filename)
         path_g = os.path.join(self.root, f"{row['Folder']}_G", filename)
         path_b = os.path.join(self.root, f"{row['Folder']}_B", filename)
@@ -119,6 +132,10 @@ class CollagenDataset(Dataset):
 
         # Stack grayscale images to form a 3-channel image
         image = np.stack([image_r, image_g, image_b], axis=-1)  # Shape: (H, W, 3)
+
+        # Read binary image
+        # path = os.path.join(self.root, row['Folder'], filename)
+        # image = np.array(Image.open(path).convert('RGB'))
 
         if self.training:
             xs = self.strong_transform(image=image)['image']

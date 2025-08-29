@@ -203,7 +203,10 @@ class TcgaGbmLggPatientDataset(Dataset):
                 "label": label[mask][0],
             }
             self.patients.append(record)
-
+            
+        # for training surv estimation
+        self.duration = np.array([record["duration"] for record in self.patients])
+        self.event = np.array([record["event"] for record in self.patients])
         self.n_patients = len(self.patients)
 
     def __len__(self):
